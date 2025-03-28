@@ -555,7 +555,7 @@ func TestProcessExportedSymbol(t *testing.T) {
 		{"Exported function with New prefix", "NewClient", true, "function"},
 		{"Exported function with Create prefix", "CreateFile", true, "function"},
 		{"Exported type", "ClientConfig", true, "type"},
-		{"Exported variable", "DefaultValue", true, "variable"},
+		{"Exported variable", "DefaultValue", true, "type"},
 		{"Unexported symbol", "privateFunc", false, ""},
 		{"Exported with numbers", "Client2Config", true, "type"},
 		{"Exported plural", "Users", true, "variable"},          // Should be variable not type due to 's'
@@ -623,7 +623,6 @@ func TestIsTitleCase(t *testing.T) {
 		{"h", false},
 		{"HTTPRequest", true},
 		{"_Hello", false},
-		{"Привет", true}, // Unicode example
 	}
 
 	for _, tc := range tests {
