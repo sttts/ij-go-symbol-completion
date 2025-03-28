@@ -88,6 +88,26 @@ export async function activate(context: vscode.ExtensionContext) {
     )
   );
   
+  // Register command to handle command chaining
+  context.subscriptions.push(
+    vscode.commands.registerCommand('_ij-go-symbol-completion.chainCommands', async (cmdWithNext) => {
+      // Execute the next command stored in the 'next' property
+      if (cmdWithNext && cmdWithNext.next) {
+        // Wait a bit for the current command to complete
+        setTimeout(async () => {
+          try {
+            await vscode.commands.executeCommand(
+              cmdWithNext.next.command,
+              ...(cmdWithNext.next.arguments || [])
+            );
+          } catch (error) {
+            logger.log(`Error executing chained command: ${error instanceof Error ? error.message : String(error)}`);
+          }
+        }, 100);
+      }
+    })
+  );
+  
   // Register command to show the symbol cache
   context.subscriptions.push(
     vscode.commands.registerCommand('ij-go-symbol-completion.showSymbolCache', () => {

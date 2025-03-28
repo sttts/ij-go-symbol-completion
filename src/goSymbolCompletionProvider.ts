@@ -66,19 +66,55 @@ export class GoSymbolCompletionProvider implements vscode.CompletionItemProvider
     // Set label details
     item.detail = `${symbol.packagePath}.${symbol.name}`;
     
+    // Extract the package name from the packagePath (last segment)
+    const packageName = symbol.packagePath.split('/').pop() || symbol.packagePath;
+    
     // Add package prefix if it's not already in the query
     const hasPackagePrefix = query.includes('.');
     
     if (!hasPackagePrefix) {
       item.filterText = symbol.name;
-      
-      // Insert package name prefix + symbol name
-      item.insertText = `${symbol.packageName}.${symbol.name}`;
+      item.insertText = symbol.name;
       
       // For functions, add signature information
       if (symbol.kind === 'func' && symbol.signature) {
-        const snippetText = this.createFunctionSnippet(`${symbol.packageName}.${symbol.name}`, symbol.signature);
+        const snippetText = this.createFunctionSnippet(symbol.name, symbol.signature);
         item.insertText = new vscode.SnippetString(snippetText);
+      }
+      
+      // Add a command that will add the package prefix when the item is selected
+      item.command = {
+        title: 'Add Import and Package Prefix',
+        command: 'editor.action.insertSnippet',
+        arguments: [{
+          snippet: `${packageName}.${symbol.name}${symbol.kind === 'func' ? '($0)' : ''}`,
+        }]
+      };
+      
+      // If we need to add the import, chain another command
+      if (needsImport) {
+        const originalCommand = item.command;
+        item.command = {
+          title: 'Add Import',
+          command: 'editor.action.codeAction',
+          arguments: [
+            document.uri,
+            { diagnostics: [], only: 'source.addImport' } as unknown as vscode.CodeActionContext,
+            symbol.packagePath
+          ]
+        };
+        
+        // After import is added, call our chain command handler to execute the next command
+        const next = originalCommand;
+        item.command = {
+          title: 'Chain Commands',
+          command: '_ij-go-symbol-completion.chainCommands',
+          arguments: [{ 
+            command: item.command.command,
+            arguments: item.command.arguments,
+            next: next
+          }]
+        };
       }
       
       // Make VS Code prefer this item in the list
@@ -101,19 +137,8 @@ export class GoSymbolCompletionProvider implements vscode.CompletionItemProvider
     item.documentation = new vscode.MarkdownString();
     item.documentation.appendCodeblock(`${symbol.packagePath}.${symbol.name}${symbol.signature || ''}`, 'go');
     
-    if (needsImport) {
+    if (needsImport && !hasPackagePrefix) {
       item.documentation.appendText('\n\n(Import will be added automatically)');
-      
-      // Add command to add import for this symbol's package
-      item.command = {
-        title: 'Add Import',
-        command: 'editor.action.codeAction',
-        arguments: [
-          document.uri,
-          { diagnostics: [], only: 'source.addImport' } as unknown as vscode.CodeActionContext,
-          symbol.packagePath
-        ]
-      };
     }
     
     return item;
