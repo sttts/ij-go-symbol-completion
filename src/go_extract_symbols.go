@@ -647,7 +647,7 @@ func processExportedSymbol(symbolName string, pkg *PackageSymbols) {
 		return
 	}
 
-	debugLog("Processing exported symbol: %s in package %s", symbolName, pkg.Name)
+	debugLog("Processing exported symbol: %s in package %s", symbolName, pkg.ImportPath)
 
 	// Check if symbol starts with uppercase letter (exported)
 	firstChar := symbolName[0:1]
@@ -656,9 +656,9 @@ func processExportedSymbol(symbolName string, pkg *PackageSymbols) {
 	// Debug info about export status
 	if *debug {
 		if isExported {
-			debugLog("Symbol %s is exported (first char: %s)", symbolName, firstChar)
+			debugLog("Symbol %s.%s is exported (first char: %s)", pkg.ImportPath, symbolName, firstChar)
 		} else {
-			debugLog("Symbol %s is NOT exported (first char: %s) - will be skipped", symbolName, firstChar)
+			debugLog("Symbol %s.%s is NOT exported (first char: %s) - will be skipped", pkg.ImportPath, symbolName, firstChar)
 		}
 	}
 
@@ -675,7 +675,7 @@ func processExportedSymbol(symbolName string, pkg *PackageSymbols) {
 			Name:       symbolName,
 			IsExported: true,
 		})
-		debugLog("Added symbol %s as a function", symbolName)
+		debugLog("Added symbol %s.%s as a function", pkg.ImportPath, symbolName)
 	} else if isTitleCase(symbolName) && !strings.HasSuffix(symbolName, "s") &&
 		!strings.HasSuffix(symbolName, "er") && symbolName != pkg.Name {
 		// Likely a type (CamelCase, not plural, not ending with -er, not same as package name)
@@ -683,14 +683,14 @@ func processExportedSymbol(symbolName string, pkg *PackageSymbols) {
 			Name:       symbolName,
 			IsExported: true,
 		})
-		debugLog("Added symbol %s as a type", symbolName)
+		debugLog("Added symbol %s.%s as a type", pkg.ImportPath, symbolName)
 	} else {
 		// Default to variable
 		pkg.Variables = append(pkg.Variables, Variable{
 			Name:       symbolName,
 			IsExported: true,
 		})
-		debugLog("Added symbol %s as a variable", symbolName)
+		debugLog("Added symbol %s.%s as a variable", pkg.ImportPath, symbolName)
 	}
 }
 
@@ -723,7 +723,7 @@ func parseDocOutput(docOutput string, pkg *PackageSymbols) {
 				Name:       typeName,
 				IsExported: isTitleCase(typeName),
 			})
-			debugLog("Found type: %s (isExported: %v)", typeName, isTitleCase(typeName))
+			debugLog("Found type: %s.%s (isExported: %v)", pkg.ImportPath, typeName, isTitleCase(typeName))
 			processedSymbols++
 		}
 	}
@@ -743,7 +743,7 @@ func parseDocOutput(docOutput string, pkg *PackageSymbols) {
 				Signature:  signature,
 				IsExported: isTitleCase(funcName),
 			})
-			debugLog("Found function: %s (isExported: %v)", funcName, isTitleCase(funcName))
+			debugLog("Found function: %s.%s (isExported: %v)", pkg.ImportPath, funcName, isTitleCase(funcName))
 			processedSymbols++
 		}
 	}
@@ -763,7 +763,7 @@ func parseDocOutput(docOutput string, pkg *PackageSymbols) {
 				Signature:  signature,
 				IsExported: isTitleCase(methodName),
 			})
-			debugLog("Found method: %s (isExported: %v)", methodName, isTitleCase(methodName))
+			debugLog("Found method: %s.%s (isExported: %v)", pkg.ImportPath, methodName, isTitleCase(methodName))
 			processedSymbols++
 		}
 	}
@@ -779,7 +779,7 @@ func parseDocOutput(docOutput string, pkg *PackageSymbols) {
 				IsConstant: false,
 				IsExported: isTitleCase(varName),
 			})
-			debugLog("Found variable: %s (isExported: %v)", varName, isTitleCase(varName))
+			debugLog("Found variable: %s.%s (isExported: %v)", pkg.ImportPath, varName, isTitleCase(varName))
 			processedSymbols++
 		}
 	}
@@ -795,12 +795,12 @@ func parseDocOutput(docOutput string, pkg *PackageSymbols) {
 				IsConstant: true,
 				IsExported: isTitleCase(constName),
 			})
-			debugLog("Found constant: %s (isExported: %v)", constName, isTitleCase(constName))
+			debugLog("Found constant: %s.%s (isExported: %v)", pkg.ImportPath, constName, isTitleCase(constName))
 			processedSymbols++
 		}
 	}
 
-	debugLog("Total symbols processed: %d for package %s", processedSymbols, pkg.Name)
+	debugLog("Total symbols processed: %d for package %s", processedSymbols, pkg.ImportPath)
 }
 
 // isTitleCase checks if a string starts with an uppercase letter
