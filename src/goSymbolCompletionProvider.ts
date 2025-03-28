@@ -82,25 +82,31 @@ export class GoSymbolCompletionProvider implements vscode.CompletionItemProvider
       
       item.filterText = symbol.name;
       
-      // For quick replace, we'll directly insert the qualified name
-      const isFunctionWithParams = symbol.kind === 'func' && symbol.signature && symbol.signature.includes('(');
-      const packagePrefixedName = `${packageName}.${symbol.name}`;
+      // Insert the qualified symbol with package prefix
+      const qualifiedName = `${packageName}.${symbol.name}`;
       
-      if (isFunctionWithParams) {
-        // For functions, add signature information with package prefix
-        const snippetText = this.createFunctionSnippet(packagePrefixedName, symbol.signature);
+      if (symbol.kind === 'func' && symbol.signature) {
+        // For functions, create a snippet with parameters
+        const snippetText = this.createFunctionSnippet(qualifiedName, symbol.signature);
         item.insertText = new vscode.SnippetString(snippetText);
       } else {
-        // For non-functions, insert the qualified name directly
-        item.insertText = packagePrefixedName;
+        // For non-functions, just insert the qualified name
+        item.insertText = qualifiedName;
       }
       
-      // Add command to add the import
+      // Add documentation
+      item.documentation = new vscode.MarkdownString();
+      item.documentation.appendCodeblock(`${symbol.packagePath}.${symbol.name}${symbol.signature || ''}`, 'go');
+      
       if (needsImport) {
+        item.documentation.appendText('\n\n(Import will be added automatically)');
+        
+        // Use go.import.add to add the import for this package
         item.command = {
           title: 'Add Import',
           command: 'go.import.add',
-          arguments: [symbol.packagePath || '']
+          // Pass a string value directly to satisfy TypeScript
+          arguments: [symbol.packagePath]
         };
       }
       
@@ -118,14 +124,10 @@ export class GoSymbolCompletionProvider implements vscode.CompletionItemProvider
         const snippetText = this.createFunctionSnippet(symbol.name, symbol.signature);
         item.insertText = new vscode.SnippetString(snippetText);
       }
-    }
-    
-    // Add documentation
-    item.documentation = new vscode.MarkdownString();
-    item.documentation.appendCodeblock(`${symbol.packagePath}.${symbol.name}${symbol.signature || ''}`, 'go');
-    
-    if (needsImport && !hasPackagePrefix) {
-      item.documentation.appendText('\n\n(Import will be added automatically)');
+      
+      // Add documentation
+      item.documentation = new vscode.MarkdownString();
+      item.documentation.appendCodeblock(`${symbol.packagePath}.${symbol.name}${symbol.signature || ''}`, 'go');
     }
     
     return item;
