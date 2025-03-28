@@ -874,7 +874,7 @@ export class GoSymbolCache {
           if (allPackages && allPackages.trim() !== '') {
             allPackages.split('\n')
               .map(line => line.trim())
-              .filter(line => line && !line.includes('no Go files'))
+              .filter(line => line)
               .forEach(pkg => {
                 // Add all non-standard, non-workspace packages
                 if (!this.isStandardLibraryPackage(pkg) && !this.isWorkspacePackage(pkg)) {
@@ -907,7 +907,7 @@ export class GoSymbolCache {
               if (modulePackages && modulePackages.trim() !== '') {
                 modulePackages.split('\n')
                   .map(line => line.trim())
-                  .filter(line => line && !line.includes('no Go files'))
+                  .filter(line => line)
                   .forEach(pkg => packages.add(pkg));
               }
             } catch (moduleError) {
