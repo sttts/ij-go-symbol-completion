@@ -54,27 +54,32 @@ var (
 	timeoutSeconds = flag.Int("timeout", 10, "Timeout in seconds for each package")
 	verbose        = flag.Bool("verbose", false, "Enable verbose logging")
 	debug          = flag.Bool("debug", false, "Enable debug mode with extra logging")
+	verbosityLevel = flag.Int("v", 1, "Verbosity level (0=none, 1=basic, 2=detailed, 3=verbose)")
 )
 
-// logCommand logs command execution details to stderr
+// logCommand logs command execution details to stderr based on verbosity level
 func logCommand(cmd *exec.Cmd) {
-	if *verbose || *debug {
+	if *verbosityLevel >= 2 {
 		fmt.Fprintf(os.Stderr, "DEBUG: Executing command: %s\n", cmd.Path)
 		fmt.Fprintf(os.Stderr, "DEBUG: Working directory: %s\n", cmd.Dir)
 	}
 }
 
-// debugLog logs messages only when debug mode is enabled
-func debugLog(format string, args ...interface{}) {
-	if *debug {
-		fmt.Fprintf(os.Stderr, "DEBUG: "+format+"\n", args...)
+// debugLog logs messages only when debug mode is enabled or verbosity level is high enough
+func debugLog(level int, format string, args ...interface{}) {
+	if *debug || *verbosityLevel >= level {
+		prefix := "DEBUG"
+		if level > 1 {
+			prefix = fmt.Sprintf("DEBUG[%d]", level)
+		}
+		fmt.Fprintf(os.Stderr, prefix+": "+format+"\n", args...)
 	}
 }
 
-// verboseLog logs messages only when verbose mode is enabled
+// verboseLog logs messages only when verbose mode is enabled or verbosity level is high
 func verboseLog(format string, args ...interface{}) {
-	if *verbose || *debug {
-		fmt.Fprintf(os.Stderr, "DEBUG: "+format+"\n", args...)
+	if *verbose || *verbosityLevel >= 3 {
+		fmt.Fprintf(os.Stderr, "VERBOSE: "+format+"\n", args...)
 	}
 }
 
@@ -88,13 +93,13 @@ func main() {
 	}
 
 	// Log startup info
-	fmt.Fprintf(os.Stderr, "DEBUG: Starting Go symbol extraction\n")
-	fmt.Fprintf(os.Stderr, "DEBUG: Packages file: %s\n", *packagesFile)
-	fmt.Fprintf(os.Stderr, "DEBUG: Current working directory: %s\n", getWorkingDir())
+	debugLog(1, "Starting Go symbol extraction")
+	debugLog(1, "Packages file: %s", *packagesFile)
+	debugLog(2, "Current working directory: %s", getWorkingDir())
 
 	// Ensure GO111MODULE is set to on for consistent behavior
 	os.Setenv("GO111MODULE", "on")
-	fmt.Fprintf(os.Stderr, "DEBUG: Set GO111MODULE=on\n")
+	debugLog(2, "Set GO111MODULE=on")
 
 	// Read package list
 	content, err := ioutil.ReadFile(*packagesFile)
@@ -118,9 +123,9 @@ func main() {
 		os.Exit(1)
 	}
 
-	fmt.Fprintf(os.Stderr, "DEBUG: Found %d packages to analyze\n", len(packages))
-	if *verbose {
-		fmt.Fprintf(os.Stderr, "DEBUG: Packages to analyze: %s\n", strings.Join(packages, ", "))
+	debugLog(1, "Found %d packages to analyze", len(packages))
+	if *verbosityLevel >= 3 {
+		debugLog(3, "Packages to analyze: %s", strings.Join(packages, ", "))
 	}
 
 	// Create temp directory for our module
@@ -131,7 +136,7 @@ func main() {
 	}
 	defer os.RemoveAll(tempDir)
 
-	fmt.Fprintf(os.Stderr, "DEBUG: Created temporary directory: %s\n", tempDir)
+	debugLog(2, "Created temporary directory: %s", tempDir)
 
 	// Initialize a Go module with a higher Go version to support more modules
 	goModContent := `module symbols-extractor
@@ -144,7 +149,7 @@ go 1.21
 		fmt.Fprintf(os.Stderr, "Error creating go.mod file: %v\n", err)
 		os.Exit(1)
 	}
-	fmt.Fprintf(os.Stderr, "DEBUG: Created go.mod in %s\n", tempDir)
+	debugLog(2, "Created go.mod in %s", tempDir)
 
 	// Create a simple Go file to verify the module setup
 	mainGoContent := `package main
@@ -158,7 +163,7 @@ func main() {
 		fmt.Fprintf(os.Stderr, "Error creating main.go file: %v\n", err)
 		os.Exit(1)
 	}
-	fmt.Fprintf(os.Stderr, "DEBUG: Created main.go in %s\n", tempDir)
+	debugLog(2, "Created main.go in %s", tempDir)
 
 	// Verify the module setup
 	cmd := exec.Command("go", "mod", "tidy")
@@ -186,12 +191,12 @@ func main() {
 		}
 	}
 
-	fmt.Fprintf(os.Stderr, "DEBUG: Found %d standard library packages and %d external packages\n",
+	debugLog(1, "Found %d standard library packages and %d external packages",
 		len(stdLibPackages), len(externalPackages))
 
 	// First process standard library which doesn't need module setup
 	for _, pkgPath := range stdLibPackages {
-		fmt.Fprintf(os.Stderr, "DEBUG: Processing standard library package: %s\n", pkgPath)
+		debugLog(2, "Processing standard library package: %s", pkgPath)
 		pkgSymbols, err := extractPackageSymbols(pkgPath, tempDir, *timeoutSeconds, *verbose)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "Error extracting symbols from %s: %v\n", pkgPath, err)
@@ -212,10 +217,10 @@ func main() {
 		}
 
 		batch := externalPackages[i:end]
-		fmt.Fprintf(os.Stderr, "DEBUG: Processing batch %d to %d of external packages\n", i, end-1)
+		debugLog(2, "Processing batch %d to %d of external packages", i, end-1)
 
 		for _, pkgPath := range batch {
-			fmt.Fprintf(os.Stderr, "DEBUG: Processing external package: %s\n", pkgPath)
+			debugLog(2, "Processing external package: %s", pkgPath)
 
 			pkgSymbols, err := extractPackageSymbols(pkgPath, tempDir, *timeoutSeconds, *verbose)
 			if err != nil {
@@ -647,7 +652,7 @@ func processExportedSymbol(symbolName string, pkg *PackageSymbols) {
 		return
 	}
 
-	debugLog("Processing exported symbol: %s in package %s", symbolName, pkg.ImportPath)
+	debugLog(1, "Processing exported symbol: %s in package %s", symbolName, pkg.ImportPath)
 
 	// Check if symbol starts with uppercase letter (exported)
 	firstChar := symbolName[0:1]
@@ -656,9 +661,9 @@ func processExportedSymbol(symbolName string, pkg *PackageSymbols) {
 	// Debug info about export status
 	if *debug {
 		if isExported {
-			debugLog("Symbol %s.%s is exported (first char: %s)", pkg.ImportPath, symbolName, firstChar)
+			debugLog(1, "Symbol %s.%s is exported (first char: %s)", pkg.ImportPath, symbolName, firstChar)
 		} else {
-			debugLog("Symbol %s.%s is NOT exported (first char: %s) - will be skipped", pkg.ImportPath, symbolName, firstChar)
+			debugLog(1, "Symbol %s.%s is NOT exported (first char: %s) - will be skipped", pkg.ImportPath, symbolName, firstChar)
 		}
 	}
 
@@ -675,7 +680,7 @@ func processExportedSymbol(symbolName string, pkg *PackageSymbols) {
 			Name:       symbolName,
 			IsExported: true,
 		})
-		debugLog("Added symbol %s.%s as a function", pkg.ImportPath, symbolName)
+		debugLog(1, "Added symbol %s.%s as a function", pkg.ImportPath, symbolName)
 	} else if isTitleCase(symbolName) && !strings.HasSuffix(symbolName, "s") &&
 		!strings.HasSuffix(symbolName, "er") && symbolName != pkg.Name {
 		// Likely a type (CamelCase, not plural, not ending with -er, not same as package name)
@@ -683,23 +688,23 @@ func processExportedSymbol(symbolName string, pkg *PackageSymbols) {
 			Name:       symbolName,
 			IsExported: true,
 		})
-		debugLog("Added symbol %s.%s as a type", pkg.ImportPath, symbolName)
+		debugLog(1, "Added symbol %s.%s as a type", pkg.ImportPath, symbolName)
 	} else {
 		// Default to variable
 		pkg.Variables = append(pkg.Variables, Variable{
 			Name:       symbolName,
 			IsExported: true,
 		})
-		debugLog("Added symbol %s.%s as a variable", pkg.ImportPath, symbolName)
+		debugLog(1, "Added symbol %s.%s as a variable", pkg.ImportPath, symbolName)
 	}
 }
 
 // parseDocOutput parses go doc output and extracts symbols
 func parseDocOutput(docOutput string, pkg *PackageSymbols) {
-	debugLog("Parsing go doc output for package %s", pkg.Name)
+	debugLog(1, "Parsing go doc output for package %s", pkg.Name)
 
 	if len(docOutput) == 0 {
-		debugLog("Empty doc output for package %s", pkg.Name)
+		debugLog(1, "Empty doc output for package %s", pkg.Name)
 		return
 	}
 
@@ -707,7 +712,7 @@ func parseDocOutput(docOutput string, pkg *PackageSymbols) {
 	lines := strings.Split(docOutput, "\n")
 	if len(lines) > 0 && strings.HasPrefix(lines[0], "package ") {
 		pkg.Name = strings.TrimSpace(strings.TrimPrefix(lines[0], "package "))
-		debugLog("Found package name: %s", pkg.Name)
+		debugLog(1, "Found package name: %s", pkg.Name)
 	}
 
 	// Use regex to extract types, functions, methods, constants, and variables
@@ -723,7 +728,7 @@ func parseDocOutput(docOutput string, pkg *PackageSymbols) {
 				Name:       typeName,
 				IsExported: isTitleCase(typeName),
 			})
-			debugLog("Found type: %s.%s (isExported: %v)", pkg.ImportPath, typeName, isTitleCase(typeName))
+			debugLog(1, "Found type: %s.%s (isExported: %v)", pkg.ImportPath, typeName, isTitleCase(typeName))
 			processedSymbols++
 		}
 	}
@@ -743,7 +748,7 @@ func parseDocOutput(docOutput string, pkg *PackageSymbols) {
 				Signature:  signature,
 				IsExported: isTitleCase(funcName),
 			})
-			debugLog("Found function: %s.%s (isExported: %v)", pkg.ImportPath, funcName, isTitleCase(funcName))
+			debugLog(1, "Found function: %s.%s (isExported: %v)", pkg.ImportPath, funcName, isTitleCase(funcName))
 			processedSymbols++
 		}
 	}
@@ -763,7 +768,7 @@ func parseDocOutput(docOutput string, pkg *PackageSymbols) {
 				Signature:  signature,
 				IsExported: isTitleCase(methodName),
 			})
-			debugLog("Found method: %s.%s (isExported: %v)", pkg.ImportPath, methodName, isTitleCase(methodName))
+			debugLog(1, "Found method: %s.%s (isExported: %v)", pkg.ImportPath, methodName, isTitleCase(methodName))
 			processedSymbols++
 		}
 	}
@@ -779,7 +784,7 @@ func parseDocOutput(docOutput string, pkg *PackageSymbols) {
 				IsConstant: false,
 				IsExported: isTitleCase(varName),
 			})
-			debugLog("Found variable: %s.%s (isExported: %v)", pkg.ImportPath, varName, isTitleCase(varName))
+			debugLog(1, "Found variable: %s.%s (isExported: %v)", pkg.ImportPath, varName, isTitleCase(varName))
 			processedSymbols++
 		}
 	}
@@ -795,12 +800,12 @@ func parseDocOutput(docOutput string, pkg *PackageSymbols) {
 				IsConstant: true,
 				IsExported: isTitleCase(constName),
 			})
-			debugLog("Found constant: %s.%s (isExported: %v)", pkg.ImportPath, constName, isTitleCase(constName))
+			debugLog(1, "Found constant: %s.%s (isExported: %v)", pkg.ImportPath, constName, isTitleCase(constName))
 			processedSymbols++
 		}
 	}
 
-	debugLog("Total symbols processed: %d for package %s", processedSymbols, pkg.ImportPath)
+	debugLog(1, "Total symbols processed: %d for package %s", processedSymbols, pkg.ImportPath)
 }
 
 // isTitleCase checks if a string starts with an uppercase letter

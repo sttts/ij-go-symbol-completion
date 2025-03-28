@@ -2,7 +2,7 @@
   "name": "ij-go-symbol-completion",
   "displayName": "Go Symbol Completion",
   "description": "IntelliJ-like Go symbol completion with or without package prefix",
-  "version": "0.0.25",
+  "version": "0.0.27",
   "publisher": "sschimanski",
   "engines": {
     "vscode": "^1.60.0"
@@ -35,6 +35,18 @@
           "type": "string",
           "default": "gopls",
           "description": "Path to the gopls executable"
+        },
+        "goSymbolCompletion.debugLevel": {
+          "type": "number",
+          "default": 1,
+          "enum": [0, 1, 2, 3],
+          "enumDescriptions": [
+            "No debugging output",
+            "Basic debugging (errors and important operations)",
+            "More detailed debugging (symbol extraction details)",
+            "All debugging output (including command output)"
+          ],
+          "description": "Controls the verbosity of debug logging (0=none, 1=basic, 2=detailed, 3=verbose)"
         }
       }
     }
