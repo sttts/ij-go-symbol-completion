@@ -2,7 +2,7 @@
   "name": "ij-go-symbol-completion",
   "displayName": "Go Symbol Completion",
   "description": "IntelliJ-like Go symbol completion with or without package prefix",
-  "version": "0.0.39",
+  "version": "0.0.40",
   "publisher": "sttts",
   "engines": {
     "vscode": "^1.60.0"
@@ -21,8 +21,35 @@
       {
         "command": "ij-go-symbol-completion.showSymbolCache",
         "title": "Go: Show Symbol Cache"
+      },
+      {
+        "command": "ij-go-symbol-completion.reindexPackage",
+        "title": "Go: Reindex Package"
+      },
+      {
+        "command": "ij-go-symbol-completion.reindexPackageFromContext",
+        "title": "Go: Reindex This Package"
       }
     ],
+    "menus": {
+      "editor/context": [
+        {
+          "when": "editorLangId == go && editorTextFocus",
+          "command": "ij-go-symbol-completion.reindexPackageFromContext",
+          "group": "navigation@1"
+        }
+      ],
+      "commandPalette": [
+        {
+          "command": "ij-go-symbol-completion.reindexPackageFromContext",
+          "when": "false"
+        },
+        {
+          "command": "ij-go-symbol-completion.reindexPackage",
+          "when": "editorLangId == go"
+        }
+      ]
+    },
     "configuration": {
       "title": "Go Symbol Completion",
       "properties": {

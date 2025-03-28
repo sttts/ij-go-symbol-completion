@@ -1940,151 +1940,69 @@ export class GoSymbolCache {
   
   /**
    * Get debug information about the symbol cache
+   * @param includeSymbols Whether to include all symbols in the output
+   * @returns Debug information as a string
    */
-  public getDebugInfo(showAll: boolean = false): string {
-    if (!this.initialized) {
-      return "Symbol cache not initialized - can't show debug info";
+  public getDebugInfo(includeSymbols: boolean = false): string {
+    const output: string[] = [];
+    
+    output.push('# Go Symbol Cache Debug Information');
+    output.push('');
+    output.push(`- Initialized: ${this.initialized}`);
+    output.push(`- Symbols Count: ${this.symbols.size}`);
+    output.push(`- Indexed Packages: ${this.indexedPackages.size}`);
+    output.push(`- Is Leader: ${this.isLeader}`);
+    output.push(`- Go Version: ${this.goVersion}`);
+    output.push(`- Cache Path: ${this.cachePath}`);
+    output.push('');
+    
+    // Add information about indexed packages
+    output.push('## Indexed Packages');
+    output.push('');
+    
+    // Sort packages for easier viewing
+    const sortedPackages = Array.from(this.indexedPackages.entries())
+      .sort((a, b) => a[0].localeCompare(b[0]));
+    
+    for (const [pkg, version] of sortedPackages) {
+      output.push(`- ${pkg}: ${version}`);
     }
     
-    // Categorize symbols by package source
-    const stdLibSymbols = new Set<string>();
-    const externalSymbols = new Set<string>();
-    let stdLibCount = 0;
-    let externalCount = 0;
-    
-    for (const [name, symbols] of this.symbols.entries()) {
-      for (const symbol of symbols) {
-        if (this.isStandardLibraryPackage(symbol.packagePath)) {
-          stdLibSymbols.add(name);
-          stdLibCount++;
-        } else {
-          externalSymbols.add(name);
-          externalCount++;
-        }
+    if (includeSymbols) {
+      output.push('');
+      output.push('## Symbols');
+      output.push('');
+      
+      // Get total symbol count
+      let totalSymbolCount = 0;
+      for (const symbolList of this.symbols.values()) {
+        totalSymbolCount += symbolList.length;
       }
-    }
-    
-    let output = `Symbol cache contains ${this.symbols.size} unique symbol names\n\n`;
-    output += `Standard library symbols: ${stdLibSymbols.size} unique names (${stdLibCount} total symbols)\n`;
-    output += `External package symbols: ${externalSymbols.size} unique names (${externalCount} total symbols)\n\n`;
-    
-    let totalSymbols = 0;
-    for (const symbols of this.symbols.values()) {
-      totalSymbols += symbols.length;
-    }
-    
-    output += `Total symbols: ${totalSymbols}\n\n`;
-    
-    if (showAll) {
-      output += `All symbols:\n`;
+      output.push(`Total symbols: ${totalSymbolCount}`);
+      output.push('');
       
-      // Get sorted symbols
-      const sortedSymbols = [...this.symbols.entries()].sort((a, b) => 
-        a[0].localeCompare(b[0])
-      );
+      // Sort symbol names for easier viewing
+      const sortedSymbolNames = Array.from(this.symbols.keys()).sort();
       
-      for (const [name, symbols] of sortedSymbols) {
-        output += `${name}:\n`;
+      for (const name of sortedSymbolNames) {
+        const symbols = this.symbols.get(name);
+        if (!symbols) continue;
         
-        // Group by package and kind
-        const byPackage = new Map<string, GoSymbol[]>();
+        output.push(`### ${name} (${symbols.length})`);
+        output.push('');
         
         for (const symbol of symbols) {
-          const key = `${symbol.packagePath} (${symbol.kind})`;
-          if (!byPackage.has(key)) {
-            byPackage.set(key, []);
-          }
-          byPackage.get(key)!.push(symbol);
-        }
-        
-        for (const [key, items] of byPackage.entries()) {
-          if (items.length === 1) {
-            output += `  - ${key}\n`;
-          } else {
-            output += `  - ${key} (${items.length} items)\n`;
+          output.push(`- ${symbol.kind} from ${symbol.packagePath}: ${symbol.name}`);
+          if (symbol.signature) {
+            output.push(`  Signature: ${symbol.signature}`);
           }
         }
-      }
-    } else {
-      // Just show a sample of symbols
-      output += `Sample symbols:\n`;
-      
-      // Get 5 standard library and 5 external symbols to show as a sample
-      const stdLibSample = Array.from(stdLibSymbols).slice(0, 5);
-      const externalSample = Array.from(externalSymbols).slice(0, 5);
-      
-      output += `\nStandard library samples:\n`;
-      for (const name of stdLibSample) {
-        const symbols = this.symbols.get(name) || [];
-        output += `${name}:\n`;
-        
-        // Group by package
-        const byPackage = new Map<string, GoSymbol[]>();
-        
-        for (const symbol of symbols) {
-          if (this.isStandardLibraryPackage(symbol.packagePath)) {
-            const key = `${symbol.packagePath} (${symbol.kind})`;
-            if (!byPackage.has(key)) {
-              byPackage.set(key, []);
-            }
-            byPackage.get(key)!.push(symbol);
-          }
-        }
-        
-        let count = 0;
-        for (const [key, items] of byPackage.entries()) {
-          if (count < 3) { // Show max 3 packages per symbol
-            if (items.length === 1) {
-              output += `  - ${key}\n`;
-            } else {
-              output += `  - ${key} (${items.length} items)\n`;
-            }
-            count++;
-          } else {
-            output += `  - ... and ${byPackage.size - 3} more\n`;
-            break;
-          }
-        }
-      }
-      
-      output += `\nExternal package samples:\n`;
-      for (const name of externalSample) {
-        const symbols = this.symbols.get(name) || [];
-        output += `${name}:\n`;
-        
-        // Group by package
-        const byPackage = new Map<string, GoSymbol[]>();
-        
-        for (const symbol of symbols) {
-          if (!this.isStandardLibraryPackage(symbol.packagePath)) {
-            const key = `${symbol.packagePath} (${symbol.kind})`;
-            if (!byPackage.has(key)) {
-              byPackage.set(key, []);
-            }
-            byPackage.get(key)!.push(symbol);
-          }
-        }
-        
-        let count = 0;
-        for (const [key, items] of byPackage.entries()) {
-          if (count < 3) { // Show max 3 packages per symbol
-            if (items.length === 1) {
-              output += `  - ${key}\n`;
-            } else {
-              output += `  - ${key} (${items.length} items)\n`;
-            }
-            count++;
-          } else {
-            output += `  - ... and ${byPackage.size - 3} more\n`;
-            break;
-          }
-        }
+        output.push('');
       }
     }
     
-    return output;
+    return output.join('\n');
   }
-
 
   /**
    * Get all symbols from the cache - for debugging
@@ -2240,6 +2158,90 @@ export class GoSymbolCache {
       }
     } catch (error) {
       logger.log(`Error saving cache: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+
+  /**
+   * Reindex a specific package and its subpackages
+   * @param packagePath The package path to reindex
+   * @returns Promise that resolves when reindexing is complete
+   */
+  public async reindexPackage(packagePath: string): Promise<void> {
+    if (!this.initialized) {
+      await this.initialize();
+    }
+
+    logger.log(`Reindexing package: ${packagePath}`);
+    
+    try {
+      // Get all subpackages using the Go list command
+      const workspaceFolders = vscode.workspace.workspaceFolders;
+      if (!workspaceFolders || workspaceFolders.length === 0) {
+        logger.log('No workspace folders found');
+        return;
+      }
+      
+      const cwd = workspaceFolders[0].uri.fsPath;
+      
+      // Get all subpackages of the specified package
+      const packagesToReindex: string[] = [];
+      
+      // Always include the base package
+      packagesToReindex.push(packagePath);
+      
+      // Try to get subpackages
+      try {
+        const output = await this.execCommand(`go list ${packagePath}/...`, {
+          cwd,
+          silent: true,
+          maxBuffer: 2 * 1024 * 1024
+        });
+        
+        if (output && output.trim()) {
+          const subPackages = output.trim().split('\n')
+            .map(line => line.trim())
+            .filter(line => line && !line.includes('no Go files'));
+          
+          // Add unique subpackages
+          for (const pkg of subPackages) {
+            if (!packagesToReindex.includes(pkg)) {
+              packagesToReindex.push(pkg);
+            }
+          }
+        }
+      } catch (error) {
+        // If error getting subpackages, just continue with the base package
+        logger.log(`Error getting subpackages for ${packagePath}: ${error instanceof Error ? error.message : String(error)}`);
+      }
+      
+      logger.log(`Found ${packagesToReindex.length} packages to reindex: ${packagesToReindex.join(', ')}`);
+      
+      // Remove these packages from the indexed list to force them to be reprocessed
+      for (const pkg of packagesToReindex) {
+        this.indexedPackages.delete(pkg);
+        
+        // Also remove symbols for this package
+        for (const [name, symbols] of this.symbols.entries()) {
+          const filteredSymbols = symbols.filter(symbol => symbol.packagePath !== pkg);
+          if (filteredSymbols.length !== symbols.length) {
+            if (filteredSymbols.length === 0) {
+              // If no symbols left, remove the entry
+              this.symbols.delete(name);
+            } else {
+              // Otherwise update with filtered list
+              this.symbols.set(name, filteredSymbols);
+            }
+          }
+        }
+      }
+      
+      // Now extract symbols for these packages
+      await this.extractSymbolsFromPackages(packagesToReindex);
+      
+      logger.log(`Reindexing completed for ${packagePath} and ${packagesToReindex.length - 1} subpackages`);
+    } catch (error) {
+      logger.log(`Error reindexing package ${packagePath}: ${error instanceof Error ? error.message : String(error)}`);
+      throw error;
     }
   }
 } 
