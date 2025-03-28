@@ -1,0 +1,71 @@
+{
+  "name": "ij-go-symbol-completion",
+  "displayName": "Go Symbol Completion",
+  "description": "IntelliJ-like Go symbol completion with or without package prefix",
+  "version": "0.0.31",
+  "publisher": "sttts",
+  "engines": {
+    "vscode": "^1.60.0"
+  },
+  "categories": [
+    "Programming Languages",
+    "Snippets",
+    "Other"
+  ],
+  "activationEvents": [
+    "onLanguage:go"
+  ],
+  "main": "./dist/extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "ij-go-symbol-completion.showSymbolCache",
+        "title": "Go: Show Symbol Cache"
+      }
+    ],
+    "configuration": {
+      "title": "Go Symbol Completion",
+      "properties": {
+        "goSymbolCompletion.enabled": {
+          "type": "boolean",
+          "default": true,
+          "description": "Enable/disable Go symbol completion"
+        },
+        "goSymbolCompletion.goplsPath": {
+          "type": "string",
+          "default": "gopls",
+          "description": "Path to the gopls executable"
+        }
+      }
+    }
+  },
+  "scripts": {
+    "vscode:prepublish": "npm run package",
+    "compile": "webpack",
+    "postcompile": "mkdir -p dist && cp src/go_extract_symbols.go dist/",
+    "watch": "webpack --watch",
+    "package": "webpack --mode production --devtool hidden-source-map",
+    "compile-tests": "tsc -p . --outDir out",
+    "watch-tests": "tsc -p . -w --outDir out",
+    "lint": "eslint src --ext ts",
+    "package-vsix": "npm run compile && yes | vsce package --allow-missing-repository",
+    "test": "mocha out/test/**/*.js"
+  },
+  "devDependencies": {
+    "@types/vscode": "^1.60.0",
+    "@types/glob": "^7.1.3",
+    "@types/node": "^14.14.37",
+    "@types/mocha": "^9.1.0",
+    "@types/chai": "^4.3.0",
+    "chai": "^4.3.6",
+    "mocha": "^9.2.1",
+    "eslint": "^7.32.0",
+    "@typescript-eslint/eslint-plugin": "^5.13.0",
+    "@typescript-eslint/parser": "^5.13.0",
+    "glob": "^7.1.7",
+    "typescript": "^4.6.2",
+    "ts-loader": "^9.2.8",
+    "webpack": "^5.70.0",
+    "webpack-cli": "^4.9.2"
+  }
+} 
