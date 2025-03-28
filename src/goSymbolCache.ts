@@ -2084,14 +2084,7 @@ export class GoSymbolCache {
     
     return output;
   }
-  
-  /**
-   * Helper method to check if a package is from the standard library
-   */
-  private isStandardLibraryPackage(packagePath: string): boolean {
-    // Standard library packages don't have a dot in their path
-    return !packagePath.includes('.');
-  }
+
 
   /**
    * Get all symbols from the cache - for debugging
@@ -2246,14 +2239,5 @@ export class GoSymbolCache {
     } catch (error) {
       logger.log(`Error saving cache: ${error instanceof Error ? error.message : String(error)}`);
     }
-  }
-
-  /**
-   * Get symbol information from a single Go file
-   */
-  private extractSymbolsFromFile(filePath: string, packagePath: string, packageName: string): GoSymbol[] {
-    logger.log(`Extracting symbols from file: ${filePath}`);
-    // ... existing code ...
-    return output;
   }
 } 
