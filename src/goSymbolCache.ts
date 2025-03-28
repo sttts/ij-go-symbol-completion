@@ -961,10 +961,90 @@ export class GoSymbolCache {
       
       const cwd = workspaceFolders[0].uri.fsPath;
       
-      // Use go list -m to get versions
+      // First, get a map of all modules and their versions from go.mod
+      const moduleVersions = new Map<string, string>();
+      try {
+        const allModulesOutput = await this.execCommand('go list -m all', { 
+          cwd,
+          silent: true,
+          maxBuffer: 5 * 1024 * 1024 // Increase buffer for large output
+        });
+        
+        if (allModulesOutput && allModulesOutput.trim()) {
+          const lines = allModulesOutput.trim().split('\n');
+          for (const line of lines) {
+            const parts = line.trim().split(/\s+/);
+            if (parts.length >= 2) {
+              moduleVersions.set(parts[0], parts[1]);
+            } else if (parts.length === 1) {
+              // Main module
+              moduleVersions.set(parts[0], 'workspace');
+            }
+          }
+          logger.log(`Found ${moduleVersions.size} modules in go.mod`);
+        }
+      } catch (error) {
+        logger.log(`Error getting all modules: ${error instanceof Error ? error.message : String(error)}`);
+      }
+      
+      // Use go list -m -json for each package root to get more detailed information
       for (const pkg of externalPkgs) {
         try {
-          const pkgRoot = pkg.split('/')[0]; // Get root package
+          // First try to find a direct match in moduleVersions
+          let found = false;
+          
+          // Check if the full package path matches a module exactly
+          if (moduleVersions.has(pkg)) {
+            this.indexedPackages.set(pkg, moduleVersions.get(pkg)!);
+            found = true;
+            continue;
+          }
+          
+          // Try to find the module that contains this package by checking prefixes
+          for (const [module, version] of moduleVersions.entries()) {
+            if (pkg.startsWith(module + '/')) {
+              this.indexedPackages.set(pkg, version);
+              found = true;
+              break;
+            }
+          }
+          
+          if (found) continue;
+          
+          // If no direct match, try to get the root module
+          const pkgParts = pkg.split('/');
+          let pkgRoot = pkgParts[0];
+          
+          // For common hosting domains, include the first few path segments
+          if (['github.com', 'gitlab.com', 'bitbucket.org', 'golang.org', 'cloud.google.com'].includes(pkgRoot)) {
+            if (pkgParts.length >= 3) {
+              pkgRoot = `${pkgParts[0]}/${pkgParts[1]}/${pkgParts[2]}`;
+            }
+          }
+          
+          // Try JSON output for more details
+          try {
+            const jsonOutput = await this.execCommand(`go list -m -json ${pkgRoot}`, { 
+              cwd,
+              silent: true
+            });
+            
+            if (jsonOutput && jsonOutput.trim()) {
+              try {
+                const moduleInfo = JSON.parse(jsonOutput);
+                if (moduleInfo.Version) {
+                  this.indexedPackages.set(pkg, moduleInfo.Version);
+                  continue;
+                }
+              } catch (jsonErr) {
+                // Ignore JSON parse errors and try other methods
+              }
+            }
+          } catch (jsonError) {
+            // Ignore errors and try plain text output
+          }
+          
+          // Fallback to basic go list -m
           const output = await this.execCommand(`go list -m ${pkgRoot}`, { 
             cwd,
             silent: true
@@ -975,7 +1055,19 @@ export class GoSymbolCache {
             if (parts.length >= 2) {
               this.indexedPackages.set(pkg, parts[1]);
             } else {
-              this.indexedPackages.set(pkg, 'unknown');
+              // Last resort: try to find a similar module prefix
+              let bestMatch = '';
+              for (const module of moduleVersions.keys()) {
+                if (pkgRoot.startsWith(module) && module.length > bestMatch.length) {
+                  bestMatch = module;
+                }
+              }
+              
+              if (bestMatch) {
+                this.indexedPackages.set(pkg, moduleVersions.get(bestMatch)!);
+              } else {
+                this.indexedPackages.set(pkg, 'unknown');
+              }
             }
           } else {
             this.indexedPackages.set(pkg, 'unknown');
@@ -985,6 +1077,9 @@ export class GoSymbolCache {
           this.indexedPackages.set(pkg, 'unknown');
         }
       }
+      
+      logger.log(`Updated versions for ${externalPkgs.length} external packages`);
+      
     } catch (error) {
       logger.log(`Error updating package versions: ${error instanceof Error ? error.message : String(error)}`);
     }

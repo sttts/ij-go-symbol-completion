@@ -66,7 +66,7 @@ describe('GoSymbolCache', () => {
             const cacheData = JSON.parse(fileContent);
             
             // Verify cache structure
-            assert.strictEqual(cacheData.version, 2, 'Cache version should be 2');
+            assert.strictEqual(cacheData.version, 1, 'Cache version should be 1');
             assert.strictEqual(cacheData.goVersion, '1.21.0', 'Go version should be set correctly');
             assert.ok(cacheData.timestamp > 0, 'Timestamp should be set');
             assert.deepStrictEqual(cacheData.packages, { 'test/package': '1.0.0' }, 'Packages should be saved correctly');
@@ -119,7 +119,7 @@ describe('GoSymbolCache', () => {
         it('should handle Go version change', async () => {
             // Create cache data with different Go version
             const cacheData = {
-                version: 2,
+                version: 1,
                 goVersion: '1.19.0',  // Different Go version
                 timestamp: Date.now(),
                 packages: { 'test/package': '1.0.0' },
@@ -155,7 +155,7 @@ describe('GoSymbolCache', () => {
         
         it('should handle corrupted JSON gracefully', async () => {
             // Create corrupted JSON
-            fs.writeFileSync(cachePath, '{ "version": 2, "goVersion": "1.21.0", "bad_json');
+            fs.writeFileSync(cachePath, '{ "version": 1, "goVersion": "1.21.0", "bad_json');
             
             // Try to load the cache
             const cache = new GoSymbolCache();
@@ -203,6 +203,61 @@ describe('GoSymbolCache', () => {
             assert.strictEqual(privateCache.symbols.size, 1, 'Symbol map should still have one entry');
             assert.strictEqual(privateCache.symbols.has('privateFunc'), false, 
                 'Non-exported symbol should not be added');
+        });
+    });
+    
+    describe('Package version detection', () => {
+        it('should detect versions for non-standard packages', async () => {
+            const cache = new GoSymbolCache();
+            const privateCache = cache as any;
+            
+            // Mock go command executions
+            const originalExecCommand = privateCache.execCommand;
+            privateCache.execCommand = async (command: string, _options: any) => {
+                if (command === 'go list -m all') {
+                    return `
+                        example.com/mymodule
+                        github.com/user/repo v1.2.3
+                        gitlab.com/group/project v0.5.0
+                    `;
+                } else if (command === 'go list -m -json github.com/user/repo') {
+                    return `{"Path":"github.com/user/repo","Version":"v1.2.3","Time":"2023-01-15T12:00:00Z","Dir":"/path/to/repo","GoMod":"/path/to/go.mod","GoVersion":"1.21"}`;
+                } else if (command === 'go list -m gitlab.com/group/project') {
+                    return 'gitlab.com/group/project v0.5.0';
+                } else if (command === 'go list -m cloud.google.com/go') {
+                    return 'cloud.google.com/go v0.110.7';
+                } else if (command === 'go list -m -json cloud.google.com/go/pubsub') {
+                    return `{"Path":"cloud.google.com/go/pubsub","Version":"v1.33.0","Time":"2023-06-22T12:00:00Z","Dir":"/path/to/pubsub","GoMod":"/path/to/go.mod","GoVersion":"1.21"}`;
+                }
+                return '';
+            };
+            
+            // Test with various package types
+            const packages = [
+                'github.com/user/repo',
+                'github.com/user/repo/subpkg',
+                'gitlab.com/group/project',
+                'cloud.google.com/go/pubsub',
+                'bitbucket.org/user/unknown',
+                'example.com/mymodule'
+            ];
+            
+            await privateCache.updatePackageVersions(packages);
+            
+            // Verify versions were detected
+            assert.strictEqual(privateCache.indexedPackages.get('github.com/user/repo'), 'v1.2.3', 
+                'Should detect version for GitHub package');
+            assert.strictEqual(privateCache.indexedPackages.get('github.com/user/repo/subpkg'), 'v1.2.3', 
+                'Should use parent module version for subpackage');
+            assert.strictEqual(privateCache.indexedPackages.get('gitlab.com/group/project'), 'v0.5.0', 
+                'Should detect version for GitLab package');
+            assert.strictEqual(privateCache.indexedPackages.get('cloud.google.com/go/pubsub'), 'v1.33.0', 
+                'Should detect version for Cloud package');
+            assert.strictEqual(privateCache.indexedPackages.get('example.com/mymodule'), 'workspace', 
+                'Should use workspace for main module');
+            
+            // Restore original exec function
+            privateCache.execCommand = originalExecCommand;
         });
     });
 }); 
