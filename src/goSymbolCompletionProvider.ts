@@ -106,7 +106,7 @@ export class GoSymbolCompletionProvider implements vscode.CompletionItemProvider
           title: 'Add Import',
           command: 'go.import.add',
           // Pass a string value directly to satisfy TypeScript
-          arguments: [symbol.packagePath]
+          arguments: [{"importPath": symbol.packagePath}]
         };
       }
       
