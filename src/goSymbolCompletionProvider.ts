@@ -66,8 +66,12 @@ export class GoSymbolCompletionProvider implements vscode.CompletionItemProvider
     // Set label details
     item.detail = `${symbol.packagePath}.${symbol.name}`;
     
-    // Extract the package name from the packagePath (last segment)
-    const packageName = symbol.packagePath.split('/').pop() || symbol.packagePath;
+    // Extract the package name from the packagePath - properly handle versioned packages
+    const packageParts = symbol.packagePath.split('/');
+    let packageName = packageParts[packageParts.length - 1];
+    
+    // If we have a versioned package like v1alpha1, use that directly
+    // Otherwise, if it's a multi-part path, we need to extract the last component
     
     // Add package prefix if it's not already in the query
     const hasPackagePrefix = query.includes('.');
