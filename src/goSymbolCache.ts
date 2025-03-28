@@ -20,6 +20,8 @@ interface CacheData {
   version: number;        // Cache format version
   goVersion: string;      // Go version used to build the cache
   timestamp: number;      // When the cache was created
+  extensionVersion: string; // Extension version to track which version wrote the cache
+  processId: number;      // Process ID to identify which process wrote the cache
   packages: {             // Map of indexed packages and their versions
     [packagePath: string]: string; // packagePath -> version
   };
@@ -27,6 +29,15 @@ interface CacheData {
     [symbolName: string]: GoSymbol[];
   };
   processedPackages: string[]; // List of packages that have been fully processed
+}
+
+// Interface for leader registry format
+interface LeaderInfo {
+  pid: number;            // Process ID of the leader
+  hostname: string;       // Hostname to distinguish between machines
+  startTime: number;      // When the leader was elected
+  lastHeartbeat: number;  // Last time the leader confirmed it's alive
+  extensionVersion: string; // Extension version
 }
 
 // Cache version to increment when format changes
@@ -54,6 +65,12 @@ const COMMON_PACKAGES = [
   "sort"
 ];
 
+// How often to check if we're still the leader (milliseconds)
+const LEADER_HEARTBEAT_INTERVAL = 10000; // 10 seconds
+
+// How long before a leader is considered dead (milliseconds)
+const LEADER_TIMEOUT = 30000; // 30 seconds
+
 export class GoSymbolCache {
   private symbols: Map<string, GoSymbol[]> = new Map();
   private initialized: boolean = false;
@@ -62,8 +79,12 @@ export class GoSymbolCache {
   private workspaceModules: string[] = [];
   private tempFilePath: string;
   private cachePath: string;
+  private leaderLockPath: string;
   private indexedPackages: Map<string, string> = new Map(); // packagePath -> version
   private goVersion: string = '';
+  private isLeader: boolean = false;
+  private heartbeatInterval: NodeJS.Timeout | null = null;
+  private hostname: string;
   
   constructor() {
     // Create a temporary file for passing package lists to Go
@@ -72,6 +93,10 @@ export class GoSymbolCache {
     // Set up cache directory in global storage
     const cacheDir = path.join(os.homedir(), '.vscode', 'go-symbol-completion-cache');
     this.cachePath = path.join(cacheDir, 'symbol-cache.json');
+    this.leaderLockPath = path.join(cacheDir, 'leader.json');
+    
+    // Store hostname for leader identification
+    this.hostname = os.hostname();
     
     // Ensure the cache directory exists
     if (!fs.existsSync(cacheDir)) {
@@ -81,6 +106,22 @@ export class GoSymbolCache {
         logger.log(`Failed to create cache directory: ${error instanceof Error ? error.message : String(error)}`);
       }
     }
+    
+    // Set up cleanup on process exit
+    process.on('exit', () => {
+      this.releaseLeadership();
+    });
+    
+    // Handle other termination signals
+    process.on('SIGINT', () => {
+      this.releaseLeadership();
+      process.exit(0);
+    });
+    
+    process.on('SIGTERM', () => {
+      this.releaseLeadership();
+      process.exit(0);
+    });
   }
   
   /**
@@ -103,31 +144,49 @@ export class GoSymbolCache {
       this.workspaceModules = await this.getWorkspaceModules();
       logger.log(`Detected workspace modules: ${this.workspaceModules.join(', ') || 'none'}`);
       
-      // Try to load cache from disk
+      // Try to load cache from disk (non-leader instances will only read)
       const loadedFromDisk = await this.loadCacheFromDisk();
       if (loadedFromDisk) {
         logger.log("Successfully loaded symbol cache from disk");
         this.initialized = true;
         
-        // Get the packages that need to be reprocessed (changed packages)
-        const reprocessPackages = await this.getOutdatedPackages();
+        // Try to acquire leadership to handle cache updates
+        const leadershipAcquired = await this.tryAcquireLeadership();
         
-        // Still initialize common packages in the background if needed
-        if (!this.initializedCommonPackages) {
-          logger.log("Common packages not initialized, will initialize them in background");
-          this.initializeCommonPackages().catch(err => {
-            logger.log(`Error initializing common packages in background: ${err instanceof Error ? err.message : String(err)}`);
-          });
+        if (leadershipAcquired) {
+          logger.log("This instance is now the leader for cache updates");
+          
+          // Get the packages that need to be reprocessed (changed packages)
+          const reprocessPackages = await this.getOutdatedPackages();
+          
+          // Still initialize common packages in the background if needed
+          if (!this.initializedCommonPackages) {
+            logger.log("Common packages not initialized, will initialize them in background");
+            this.initializeCommonPackages().catch(err => {
+              logger.log(`Error initializing common packages in background: ${err instanceof Error ? err.message : String(err)}`);
+            });
+          }
+          
+          // If there are outdated packages, process them in the background
+          if (reprocessPackages.length > 0) {
+            logger.log(`Found ${reprocessPackages.length} outdated packages to reprocess in background`);
+            this.extractSymbolsFromPackages(reprocessPackages).catch(err => {
+              logger.log(`Error reprocessing outdated packages: ${err instanceof Error ? err.message : String(err)}`);
+            });
+          }
+        } else {
+          logger.log("Another instance is the leader, this instance will only read the cache");
         }
         
-        // If there are outdated packages, process them in the background
-        if (reprocessPackages.length > 0) {
-          logger.log(`Found ${reprocessPackages.length} outdated packages to reprocess in background`);
-          this.extractSymbolsFromPackages(reprocessPackages).catch(err => {
-            logger.log(`Error reprocessing outdated packages: ${err instanceof Error ? err.message : String(err)}`);
-          });
-        }
-        
+        return;
+      }
+      
+      // If cache couldn't be loaded, try to become the leader
+      const leadershipAcquired = await this.tryAcquireLeadership();
+      
+      if (!leadershipAcquired) {
+        logger.log("Another instance is already initializing the cache, waiting for it to complete");
+        this.initialized = true; // Mark as initialized so we don't block UI
         return;
       }
       
@@ -146,6 +205,160 @@ export class GoSymbolCache {
     } finally {
       this.initializing = false;
     }
+  }
+  
+  /**
+   * Try to acquire leadership for cache updates
+   */
+  private async tryAcquireLeadership(): Promise<boolean> {
+    try {
+      // Check if there's an existing leader
+      if (fs.existsSync(this.leaderLockPath)) {
+        try {
+          const leaderContent = await fs.promises.readFile(this.leaderLockPath, 'utf-8');
+          const leaderInfo = JSON.parse(leaderContent) as LeaderInfo;
+          
+          // Check if the leader is still alive
+          const now = Date.now();
+          if (now - leaderInfo.lastHeartbeat < LEADER_TIMEOUT) {
+            // The leader is still active
+            try {
+              // Double-check if the process is running
+              process.kill(leaderInfo.pid, 0); // This doesn't actually kill, just checks
+              logger.log(`Leader is active: PID ${leaderInfo.pid} on ${leaderInfo.hostname}`);
+              return false;
+            } catch (e) {
+              // Process doesn't exist, we can take over
+              logger.log(`Previous leader (PID ${leaderInfo.pid}) is no longer running`);
+            }
+          } else {
+            logger.log(`Previous leader (PID ${leaderInfo.pid}) timed out, last heartbeat: ${new Date(leaderInfo.lastHeartbeat).toISOString()}`);
+          }
+        } catch (error) {
+          logger.log(`Error reading leader file, assuming no active leader: ${error instanceof Error ? error.message : String(error)}`);
+        }
+      }
+      
+      // Register as the new leader
+      const extensionVersion = this.getExtensionVersion();
+      const leaderInfo: LeaderInfo = {
+        pid: process.pid,
+        hostname: this.hostname,
+        startTime: Date.now(),
+        lastHeartbeat: Date.now(),
+        extensionVersion
+      };
+      
+      // Write to a temp file first, then rename for atomicity
+      const tempLeaderPath = `${this.leaderLockPath}.tmp`;
+      await fs.promises.writeFile(tempLeaderPath, JSON.stringify(leaderInfo, null, 2), 'utf-8');
+      await fs.promises.rename(tempLeaderPath, this.leaderLockPath);
+      
+      logger.log(`Acquired leadership for cache updates (PID: ${process.pid}, version: ${extensionVersion})`);
+      this.isLeader = true;
+      
+      // Start heartbeat to maintain leadership
+      this.startHeartbeat();
+      
+      return true;
+    } catch (error) {
+      logger.log(`Error acquiring leadership: ${error instanceof Error ? error.message : String(error)}`);
+      return false;
+    }
+  }
+  
+  /**
+   * Release leadership when shutting down
+   */
+  private releaseLeadership(): void {
+    if (!this.isLeader) {
+      return;
+    }
+    
+    try {
+      // Stop the heartbeat
+      if (this.heartbeatInterval) {
+        clearInterval(this.heartbeatInterval);
+        this.heartbeatInterval = null;
+      }
+      
+      // Only delete the leader file if we're the current leader
+      if (fs.existsSync(this.leaderLockPath)) {
+        try {
+          const leaderContent = fs.readFileSync(this.leaderLockPath, 'utf-8');
+          const leaderInfo = JSON.parse(leaderContent) as LeaderInfo;
+          
+          if (leaderInfo.pid === process.pid && leaderInfo.hostname === this.hostname) {
+            fs.unlinkSync(this.leaderLockPath);
+            logger.log("Released leadership on shutdown");
+          }
+        } catch (error) {
+          logger.log(`Error releasing leadership: ${error instanceof Error ? error.message : String(error)}`);
+        }
+      }
+      
+      this.isLeader = false;
+    } catch (error) {
+      logger.log(`Error in releaseLeadership: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+  
+  /**
+   * Start heartbeat to maintain leadership
+   */
+  private startHeartbeat(): void {
+    if (this.heartbeatInterval) {
+      clearInterval(this.heartbeatInterval);
+    }
+    
+    this.heartbeatInterval = setInterval(async () => {
+      try {
+        if (!this.isLeader) {
+          if (this.heartbeatInterval) {
+            clearInterval(this.heartbeatInterval);
+            this.heartbeatInterval = null;
+          }
+          return;
+        }
+        
+        // Check if we're still the registered leader
+        if (fs.existsSync(this.leaderLockPath)) {
+          const leaderContent = await fs.promises.readFile(this.leaderLockPath, 'utf-8');
+          const leaderInfo = JSON.parse(leaderContent) as LeaderInfo;
+          
+          if (leaderInfo.pid !== process.pid || leaderInfo.hostname !== this.hostname) {
+            logger.log(`Another process has taken leadership (PID: ${leaderInfo.pid}), stepping down`);
+            this.isLeader = false;
+            if (this.heartbeatInterval) {
+              clearInterval(this.heartbeatInterval);
+              this.heartbeatInterval = null;
+            }
+            return;
+          }
+          
+          // Update the heartbeat
+          leaderInfo.lastHeartbeat = Date.now();
+          
+          // Write updated info to a temp file first, then rename for atomicity
+          const tempLeaderPath = `${this.leaderLockPath}.tmp`;
+          await fs.promises.writeFile(tempLeaderPath, JSON.stringify(leaderInfo, null, 2), 'utf-8');
+          await fs.promises.rename(tempLeaderPath, this.leaderLockPath);
+        } else {
+          // Leader file doesn't exist, try to reclaim leadership
+          const shouldReclaim = await this.tryAcquireLeadership();
+          if (!shouldReclaim) {
+            logger.log("Failed to reclaim leadership, stepping down");
+            this.isLeader = false;
+            if (this.heartbeatInterval) {
+              clearInterval(this.heartbeatInterval);
+              this.heartbeatInterval = null;
+            }
+          }
+        }
+      } catch (error) {
+        logger.log(`Error in heartbeat: ${error instanceof Error ? error.message : String(error)}`);
+      }
+    }, LEADER_HEARTBEAT_INTERVAL);
   }
   
   /**
@@ -418,112 +631,6 @@ export class GoSymbolCache {
     }
     
     return versions;
-  }
-  
-  /**
-   * Save the symbol cache to disk
-   */
-  private async saveCacheToDisk(): Promise<void> {
-    try {
-      logger.log("Saving symbol cache to disk...");
-      
-      // Verify we have data to save
-      if (this.symbols.size === 0) {
-        logger.log("No symbols in memory to save - skipping cache write");
-        return;
-      }
-      
-      // Log symbol count for debugging
-      let totalSymbolCount = 0;
-      for (const symbolList of this.symbols.values()) {
-        totalSymbolCount += symbolList.length;
-      }
-      logger.log(`Preparing to save ${this.symbols.size} unique symbols (${totalSymbolCount} total) from ${this.indexedPackages.size} packages`);
-      
-      // Convert Maps to serializable objects
-      const packagesObj: { [key: string]: string } = {};
-      for (const [pkg, version] of this.indexedPackages.entries()) {
-        packagesObj[pkg] = version;
-      }
-      
-      const symbolsObj: { [key: string]: GoSymbol[] } = {};
-      for (const [name, symbols] of this.symbols.entries()) {
-        symbolsObj[name] = symbols;
-      }
-      
-      // Get the list of processed packages from indexed packages
-      const processedPackages = Array.from(this.indexedPackages.keys());
-      
-      // Create cache data structure
-      const cacheData: CacheData = {
-        version: CACHE_VERSION,
-        goVersion: this.goVersion,
-        timestamp: Date.now(),
-        packages: packagesObj,
-        symbols: symbolsObj,
-        processedPackages: processedPackages
-      };
-      
-      // Verify the data structure has content
-      if (Object.keys(symbolsObj).length === 0) {
-        logger.log("WARNING: No symbols to save, but indexedPackages.size is " + this.indexedPackages.size);
-      }
-      
-      // Ensure directory exists
-      const cacheDir = path.dirname(this.cachePath);
-      if (!fs.existsSync(cacheDir)) {
-        logger.log(`Creating cache directory: ${cacheDir}`);
-        fs.mkdirSync(cacheDir, { recursive: true });
-      }
-      
-      // Serialize data with safety checks
-      let jsonData: string;
-      try {
-        jsonData = JSON.stringify(cacheData, null, 2);
-        logger.log(`Serialized cache data: ${jsonData.length} bytes`);
-        
-        // Check that serialization produced valid content
-        if (jsonData.length < 100 || !jsonData.includes('"symbols":{')) {
-          logger.log(`WARNING: Serialized cache data appears too small or invalid: ${jsonData.substring(0, 100)}`);
-        }
-      } catch (jsonError) {
-        logger.log(`Error serializing cache data: ${jsonError instanceof Error ? jsonError.message : String(jsonError)}`);
-        return;
-      }
-      
-      // Write file with explicit sync to ensure it's written
-      const tempPath = `${this.cachePath}.tmp`;
-      try {
-        // Write to a temporary file first
-        await fs.promises.writeFile(tempPath, jsonData, 'utf-8');
-        
-        // Verify the file was written correctly
-        const stats = await fs.promises.stat(tempPath);
-        logger.log(`Temporary cache file size: ${stats.size} bytes`);
-        
-        if (stats.size < 100) {
-          throw new Error("Cache file is suspiciously small, aborting save");
-        }
-        
-        // Rename the temp file to the actual cache file (atomic operation)
-        await fs.promises.rename(tempPath, this.cachePath);
-        
-        logger.log(`Cache saved to ${this.cachePath} with ${this.symbols.size} unique symbols (${totalSymbolCount} total) and ${processedPackages.length} processed packages`);
-      } catch (fileError) {
-        logger.log(`Error writing cache file: ${fileError instanceof Error ? fileError.message : String(fileError)}`);
-        
-        // Try direct write as fallback
-        try {
-          logger.log("Attempting direct write as fallback...");
-          await fs.promises.writeFile(this.cachePath, jsonData, 'utf-8');
-          logger.log("Direct write succeeded");
-        } catch (directError) {
-          logger.log(`Direct write also failed: ${directError instanceof Error ? directError.message : String(directError)}`);
-        }
-      }
-    } catch (error) {
-      logger.log(`Error saving cache: ${error instanceof Error ? error.message : String(error)}`);
-    }
   }
   
   /**
@@ -1907,5 +2014,153 @@ export class GoSymbolCache {
    */
   public getAllSymbols(): Map<string, GoSymbol[]> {
     return this.symbols;
+  }
+
+  /**
+   * Get the current extension version from package.json
+   */
+  private getExtensionVersion(): string {
+    try {
+      // Try to get the extension info from VS Code API first
+      const extension = vscode.extensions.getExtension('sschimanski.ij-go-symbol-completion');
+      if (extension) {
+        return extension.packageJSON.version || 'unknown';
+      }
+      
+      // Fallback: Try to read package.json directly
+      const scriptDir = __dirname;
+      const pkgJsonPath = path.join(scriptDir, '..', 'package.json');
+      
+      if (fs.existsSync(pkgJsonPath)) {
+        const pkgJson = JSON.parse(fs.readFileSync(pkgJsonPath, 'utf-8'));
+        return pkgJson.version || 'unknown';
+      }
+      
+      return 'unknown';
+    } catch (error) {
+      logger.log(`Error getting extension version: ${error instanceof Error ? error.message : String(error)}`);
+      return 'unknown';
+    }
+  }
+
+  /**
+   * Save the symbol cache to disk
+   */
+  private async saveCacheToDisk(): Promise<void> {
+    // Only allow the leader to save the cache
+    if (!this.isLeader) {
+      logger.log("Not the leader, skipping cache save");
+      return;
+    }
+    
+    try {
+      logger.log("Saving symbol cache to disk...");
+      
+      // Verify we have data to save
+      if (this.symbols.size === 0) {
+        logger.log("No symbols in memory to save - skipping cache write");
+        return;
+      }
+      
+      // Log symbol count for debugging
+      let totalSymbolCount = 0;
+      for (const symbolList of this.symbols.values()) {
+        totalSymbolCount += symbolList.length;
+      }
+      logger.log(`Preparing to save ${this.symbols.size} unique symbols (${totalSymbolCount} total) from ${this.indexedPackages.size} packages`);
+      
+      // Convert Maps to serializable objects
+      const packagesObj: { [key: string]: string } = {};
+      for (const [pkg, version] of this.indexedPackages.entries()) {
+        packagesObj[pkg] = version;
+      }
+      
+      const symbolsObj: { [key: string]: GoSymbol[] } = {};
+      for (const [name, symbols] of this.symbols.entries()) {
+        symbolsObj[name] = symbols;
+      }
+      
+      // Get the list of processed packages from indexed packages
+      const processedPackages = Array.from(this.indexedPackages.keys());
+      
+      // Get extension version and process ID for tracking
+      const extensionVersion = this.getExtensionVersion();
+      const processId = process.pid;
+      
+      // Create cache data structure
+      const cacheData: CacheData = {
+        version: CACHE_VERSION,
+        goVersion: this.goVersion,
+        timestamp: Date.now(),
+        extensionVersion,
+        processId,
+        packages: packagesObj,
+        symbols: symbolsObj,
+        processedPackages: processedPackages
+      };
+      
+      // Log who is writing to the cache
+      logger.log(`Writing cache from extension version ${extensionVersion} (PID: ${processId})`);
+      
+      // Verify the data structure has content
+      if (Object.keys(symbolsObj).length === 0) {
+        logger.log("WARNING: No symbols to save, but indexedPackages.size is " + this.indexedPackages.size);
+      }
+      
+      // Ensure directory exists
+      const cacheDir = path.dirname(this.cachePath);
+      if (!fs.existsSync(cacheDir)) {
+        logger.log(`Creating cache directory: ${cacheDir}`);
+        fs.mkdirSync(cacheDir, { recursive: true });
+      }
+      
+      // Serialize data with safety checks
+      let jsonData: string;
+      try {
+        jsonData = JSON.stringify(cacheData, null, 2);
+        logger.log(`Serialized cache data: ${jsonData.length} bytes`);
+        
+        // Check that serialization produced valid content
+        if (jsonData.length < 100 || !jsonData.includes('"symbols":{')) {
+          logger.log(`WARNING: Serialized cache data appears too small or invalid: ${jsonData.substring(0, 100)}`);
+        }
+      } catch (jsonError) {
+        logger.log(`Error serializing cache data: ${jsonError instanceof Error ? jsonError.message : String(jsonError)}`);
+        return;
+      }
+      
+      // Write file with explicit sync to ensure it's written
+      const tempPath = `${this.cachePath}.tmp`;
+      try {
+        // Write to a temporary file first
+        await fs.promises.writeFile(tempPath, jsonData, 'utf-8');
+        
+        // Verify the file was written correctly
+        const stats = await fs.promises.stat(tempPath);
+        logger.log(`Temporary cache file size: ${stats.size} bytes`);
+        
+        if (stats.size < 100) {
+          throw new Error("Cache file is suspiciously small, aborting save");
+        }
+        
+        // Rename the temp file to the actual cache file (atomic operation)
+        await fs.promises.rename(tempPath, this.cachePath);
+        
+        logger.log(`Cache saved to ${this.cachePath} with ${this.symbols.size} unique symbols (${totalSymbolCount} total) and ${processedPackages.length} processed packages`);
+      } catch (fileError) {
+        logger.log(`Error writing cache file: ${fileError instanceof Error ? fileError.message : String(fileError)}`);
+        
+        // Try direct write as fallback
+        try {
+          logger.log("Attempting direct write as fallback...");
+          await fs.promises.writeFile(this.cachePath, jsonData, 'utf-8');
+          logger.log("Direct write succeeded");
+        } catch (directError) {
+          logger.log(`Direct write also failed: ${directError instanceof Error ? directError.message : String(directError)}`);
+        }
+      }
+    } catch (error) {
+      logger.log(`Error saving cache: ${error instanceof Error ? error.message : String(error)}`);
+    }
   }
 } 
