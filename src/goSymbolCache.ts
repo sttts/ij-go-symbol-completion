@@ -85,13 +85,27 @@ export class GoSymbolCache {
   private isLeader: boolean = false;
   private heartbeatInterval: NodeJS.Timeout | null = null;
   private hostname: string;
+  private cacheFileWatcher: vscode.FileSystemWatcher | null = null;
   
   constructor() {
     // Create a temporary file for passing package lists to Go
     this.tempFilePath = path.join(os.tmpdir(), `go-symbols-${Date.now()}.txt`);
     
-    // Set up cache directory in global storage
-    const cacheDir = path.join(os.homedir(), '.vscode', 'go-symbol-completion-cache');
+    // Get workspace folders
+    const workspaceFolders = vscode.workspace.workspaceFolders;
+    let cacheDir: string;
+
+    if (workspaceFolders && workspaceFolders.length > 0) {
+      // Use workspace-specific cache in .vscode directory
+      const workspaceRoot = workspaceFolders[0].uri.fsPath;
+      cacheDir = path.join(workspaceRoot, '.vscode', 'go-symbol-completion-cache');
+      logger.log(`Using workspace-specific cache at ${cacheDir}`);
+    } else {
+      // Fallback to global cache if no workspace is open
+      cacheDir = path.join(os.homedir(), '.vscode', 'go-symbol-completion-cache');
+      logger.log(`No workspace folders found, using global cache at ${cacheDir}`);
+    }
+    
     this.cachePath = path.join(cacheDir, 'symbol-cache.json');
     this.leaderLockPath = path.join(cacheDir, 'leader.json');
     
@@ -122,6 +136,15 @@ export class GoSymbolCache {
       this.releaseLeadership();
       process.exit(0);
     });
+    
+    if (!this.isLeader) {
+      // Set up a file watcher to detect changes to the cache file by the leader
+      this.cacheFileWatcher = vscode.workspace.createFileSystemWatcher(this.cachePath);
+      this.cacheFileWatcher.onDidChange(async () => {
+        logger.log("Cache file changed by leader, reloading symbols");
+        await this.loadCacheFromDisk();
+      });
+    }
   }
   
   /**
@@ -300,6 +323,11 @@ export class GoSymbolCache {
       this.isLeader = false;
     } catch (error) {
       logger.log(`Error in releaseLeadership: ${error instanceof Error ? error.message : String(error)}`);
+    }
+    
+    if (this.cacheFileWatcher) {
+      this.cacheFileWatcher.dispose();
+      this.cacheFileWatcher = null;
     }
   }
   
@@ -811,7 +839,8 @@ export class GoSymbolCache {
       // Get direct dependencies from go.mod
       const goListMod = await this.execCommand('go list -m all', {
         cwd,
-        env: { ...process.env }
+        env: { ...process.env },
+        maxBuffer: 5 * 1024 * 1024 // Increase buffer size for large module lists
       });
       
       if (goListMod && goListMod.trim() !== '') {
@@ -819,33 +848,71 @@ export class GoSymbolCache {
           .map(line => line.trim())
           .filter(line => line && !line.startsWith('MODULE'));
         
-        // For each module, try to get its packages
+        logger.log(`Found ${deps.length} modules in go.mod`);
+        
+        // First add all module root packages
         for (const dep of deps) {
           // Extract the module name (first column)
           const moduleName = dep.split(' ')[0];
           if (!moduleName || moduleName === cwd) continue;
           
-          try {
-            // Get packages in this module
-            const modulePackages = await this.execCommand(`go list ${moduleName}/...`, {
-              cwd,
-              env: { ...process.env },
-              silent: true,
-              timeout: 5000 // 5 second timeout per module
-            });
+          // Always add the module root
+          packages.add(moduleName);
+        }
+        
+        // Then get packages for each module using a more reliable method
+        // Use go list -f to get precise package info
+        try {
+          // First try with all modules at once for performance
+          const allPackages = await this.execCommand(`go list -f '{{.ImportPath}}' all`, {
+            cwd,
+            env: { ...process.env },
+            maxBuffer: 10 * 1024 * 1024,
+            timeout: 30000 // 30 seconds timeout
+          });
+          
+          if (allPackages && allPackages.trim() !== '') {
+            allPackages.split('\n')
+              .map(line => line.trim())
+              .filter(line => line && !line.includes('no Go files'))
+              .forEach(pkg => {
+                // Add all non-standard, non-workspace packages
+                if (!this.isStandardLibraryPackage(pkg) && !this.isWorkspacePackage(pkg)) {
+                  packages.add(pkg);
+                }
+              });
             
-            if (modulePackages && modulePackages.trim() !== '') {
-              modulePackages.split('\n')
-                .map(line => line.trim())
-                .filter(line => line && !line.includes('no Go files'))
-                .forEach(pkg => packages.add(pkg));
-            } else {
-              // If we can't get subpackages, at least add the module itself
-              packages.add(moduleName);
+            logger.log(`Added ${packages.size} packages from dependencies`);
+          }
+        } catch (allError) {
+          logger.log(`Error getting all packages at once: ${allError instanceof Error ? allError.message : String(allError)}`);
+          logger.log('Falling back to per-module package discovery');
+          
+          // Fall back to per-module discovery
+          for (const dep of deps) {
+            // Extract the module name (first column)
+            const moduleName = dep.split(' ')[0];
+            if (!moduleName || moduleName === cwd) continue;
+            
+            try {
+              // Get packages in this module with a more reliable command
+              const modulePackages = await this.execCommand(`go list -f '{{.ImportPath}}' ${moduleName}/...`, {
+                cwd,
+                env: { ...process.env },
+                silent: true,
+                maxBuffer: 2 * 1024 * 1024,
+                timeout: 5000 // 5 second timeout per module
+              });
+              
+              if (modulePackages && modulePackages.trim() !== '') {
+                modulePackages.split('\n')
+                  .map(line => line.trim())
+                  .filter(line => line && !line.includes('no Go files'))
+                  .forEach(pkg => packages.add(pkg));
+              }
+            } catch (moduleError) {
+              logger.log(`Error getting packages for module ${moduleName}: ${moduleError instanceof Error ? moduleError.message : String(moduleError)}`);
             }
-          } catch (moduleError) {
-            // If getting packages fails, just add the module as a package
-            packages.add(moduleName);
           }
         }
       }
@@ -853,7 +920,24 @@ export class GoSymbolCache {
       logger.log(`Error getting go.mod dependencies: ${error instanceof Error ? error.message : String(error)}`);
     }
     
-    return Array.from(packages);
+    const result = Array.from(packages);
+    logger.log(`Total packages from go.mod dependencies: ${result.length}`);
+    return result;
+  }
+  
+  /**
+   * Check if a package is part of the standard library
+   */
+  private isStandardLibraryPackage(pkg: string): boolean {
+    // Standard library packages don't have a domain and aren't the empty string
+    return pkg !== '' && !pkg.includes('.');
+  }
+  
+  /**
+   * Check if a package is part of the current workspace
+   */
+  private isWorkspacePackage(pkg: string): boolean {
+    return this.workspaceModules.some(module => pkg === module || pkg.startsWith(module + '/'));
   }
   
   /**
@@ -2022,7 +2106,7 @@ export class GoSymbolCache {
   private getExtensionVersion(): string {
     try {
       // Try to get the extension info from VS Code API first
-      const extension = vscode.extensions.getExtension('sschimanski.ij-go-symbol-completion');
+      const extension = vscode.extensions.getExtension('sttts.ij-go-symbol-completion');
       if (extension) {
         return extension.packageJSON.version || 'unknown';
       }
@@ -2162,5 +2246,14 @@ export class GoSymbolCache {
     } catch (error) {
       logger.log(`Error saving cache: ${error instanceof Error ? error.message : String(error)}`);
     }
+  }
+
+  /**
+   * Get symbol information from a single Go file
+   */
+  private extractSymbolsFromFile(filePath: string, packagePath: string, packageName: string): GoSymbol[] {
+    logger.log(`Extracting symbols from file: ${filePath}`);
+    // ... existing code ...
+    return output;
   }
 } 
