@@ -367,7 +367,7 @@ export class GoSymbolCache {
       // Serialize data with safety checks
       let jsonData: string;
       try {
-        jsonData = JSON.stringify(cacheData);
+        jsonData = JSON.stringify(cacheData, null, 2);
         logger.log(`Serialized cache data: ${jsonData.length} bytes`);
         
         // Check that serialization produced valid content
