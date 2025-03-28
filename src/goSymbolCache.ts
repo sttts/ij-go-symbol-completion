@@ -30,7 +30,7 @@ interface CacheData {
 }
 
 // Cache version to increment when format changes
-const CACHE_VERSION = 2;
+const CACHE_VERSION = 1;
 
 // Common Go packages to pre-cache for better startup performance
 const COMMON_PACKAGES = [
