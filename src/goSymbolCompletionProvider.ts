@@ -71,13 +71,18 @@ export class GoSymbolCompletionProvider implements vscode.CompletionItemProvider
     
     if (!hasPackagePrefix) {
       item.filterText = symbol.name;
-      item.insertText = symbol.name;
+      
+      // Insert package name prefix + symbol name
+      item.insertText = `${symbol.packageName}.${symbol.name}`;
       
       // For functions, add signature information
       if (symbol.kind === 'func' && symbol.signature) {
-        const snippetText = this.createFunctionSnippet(symbol.name, symbol.signature);
+        const snippetText = this.createFunctionSnippet(`${symbol.packageName}.${symbol.name}`, symbol.signature);
         item.insertText = new vscode.SnippetString(snippetText);
       }
+      
+      // Make VS Code prefer this item in the list
+      item.sortText = `0${symbol.name}`;
     } else {
       // If there's a package prefix, we're likely completing something like "pkg."
       // In this case, just insert the symbol name
