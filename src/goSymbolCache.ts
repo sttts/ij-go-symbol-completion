@@ -2198,8 +2198,10 @@ export class GoSymbolCache {
         logger.log(`Serialized cache data: ${jsonData.length} bytes`);
         
         // Check that serialization produced valid content
-        if (jsonData.length < 100 || !jsonData.includes('"symbols":{')) {
-          logger.log(`WARNING: Serialized cache data appears too small or invalid: ${jsonData.substring(0, 100)}`);
+        if (jsonData.length < 100) {
+          logger.log(`WARNING: Serialized cache data is suspiciously small: ${jsonData.length} bytes`);
+        } else if (!jsonData.includes('"symbols":{')) {
+          logger.log(`WARNING: Serialized cache data may be invalid - missing symbols object`);
         }
       } catch (jsonError) {
         logger.log(`Error serializing cache data: ${jsonError instanceof Error ? jsonError.message : String(jsonError)}`);
