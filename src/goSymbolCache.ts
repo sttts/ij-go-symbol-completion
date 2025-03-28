@@ -1,9 +1,8 @@
-import * as vscode from 'vscode';
-import * as cp from 'child_process';
-import * as path from 'path';
-import * as util from 'util';
 import * as fs from 'fs';
+import * as path from 'path';
 import * as os from 'os';
+import * as child_process from 'child_process';
+import * as vscode from 'vscode';
 import { logger } from './extension';
 
 // Represents a Go symbol with its package and details
@@ -732,40 +731,53 @@ export class GoSymbolCache {
     timeout?: number;
   } = {}): Promise<string> {
     return new Promise<string>((resolve, reject) => {
-      if (!options.silent) {
-        logger.log(`Executing command: ${command} ${options.cwd ? `in ${options.cwd}` : ''}`);
-      }
-      
-      const proc = cp.exec(command, {
-        cwd: options.cwd,
-        env: options.env,
-        maxBuffer: options.maxBuffer || 1024 * 1024
-      }, (error, stdout, stderr) => {
-        if (error) {
-          if (!options.silent) {
-            logger.log(`Command failed: ${command}`);
-            logger.log(`Error: ${error.message}`);
-            if (stderr) {
-              logger.log(`stderr: ${stderr}`);
+      try {
+        // Set defaults
+        const maxBuffer = options.maxBuffer || 1024 * 1024 * 100; // 100 MB buffer
+        
+        // Log command if not silent
+        if (!options.silent) {
+          logger.log(`Executing command: ${command}${options.cwd ? ` (in ${options.cwd})` : ''}`);
+        }
+        
+        const proc = child_process.exec(command, {
+          cwd: options.cwd,
+          env: options.env,
+          maxBuffer: maxBuffer,
+          timeout: options.timeout,
+        });
+        
+        let stdout = '';
+        let stderr = '';
+        
+        if (proc.stdout) {
+          proc.stdout.on('data', (data) => {
+            stdout += data.toString();
+          });
+        }
+        
+        if (proc.stderr) {
+          proc.stderr.on('data', (data) => {
+            stderr += data.toString();
+          });
+        }
+        
+        proc.on('close', (code) => {
+          if (code === 0) {
+            if (!options.silent && stderr && stderr.trim() !== '') {
+              logger.log(`Command stderr: ${stderr}`);
             }
+            resolve(stdout);
+          } else {
+            if (!options.silent) {
+              logger.log(`Command failed: ${command}`);
+              logger.log(`Error: ${stderr}`);
+            }
+            reject(new Error(`Command exited with code ${code}`));
           }
-          reject(error);
-          return;
-        }
-        
-        if (!options.silent && stderr && stderr.trim() !== '') {
-          logger.log(`Command stderr: ${stderr}`);
-        }
-        
-        resolve(stdout);
-      });
-      
-      // Set timeout if specified
-      if (options.timeout) {
-        setTimeout(() => {
-          proc.kill();
-          reject(new Error(`Command timed out after ${options.timeout}ms: ${command}`));
-        }, options.timeout);
+        });
+      } catch (error) {
+        reject(error);
       }
     });
   }
@@ -873,8 +885,12 @@ export class GoSymbolCache {
         logger.log(`Failed to read helper script: ${readError instanceof Error ? readError.message : String(readError)}`);
       }
       
+      // Get debug level from VS Code configuration
+      const config = vscode.workspace.getConfiguration('goSymbolCompletion');
+      const debugLevel = config.get<number>('debugLevel', 1);
+      
       // Run the helper program with the package list - add a debug output
-      const command = `go run ${helperPath} -packages=${this.tempFilePath} -verbose -debug`;
+      const command = `go run ${helperPath} -packages=${this.tempFilePath} -verbose -v=${debugLevel}`;
       logger.log(`Running command: ${command}`);
       
       const result = await this.execCommand(command);
