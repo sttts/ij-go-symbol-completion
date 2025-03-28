@@ -70,14 +70,19 @@ export class GoSymbolCompletionProvider implements vscode.CompletionItemProvider
     const packageParts = symbol.packagePath.split('/');
     let packageName = packageParts[packageParts.length - 1];
     
-    // If we have a versioned package like v1alpha1, use that directly
-    // Otherwise, if it's a multi-part path, we need to extract the last component
-    
     // Add package prefix if it's not already in the query
     const hasPackagePrefix = query.includes('.');
     
     if (!hasPackagePrefix) {
+      // Use the package name as a label suffix to help users identify the package
+      item.label = {
+        label: symbol.name,
+        detail: ` - ${packageName}`
+      };
+      
       item.filterText = symbol.name;
+      
+      // We will insert only the symbol name initially
       item.insertText = symbol.name;
       
       // For functions, add signature information
@@ -86,40 +91,28 @@ export class GoSymbolCompletionProvider implements vscode.CompletionItemProvider
         item.insertText = new vscode.SnippetString(snippetText);
       }
       
-      // Add a command that will add the package prefix when the item is selected
+      // Add additional text edit to import the package if needed
+      if (needsImport) {
+        // Create an additional edit to add the import statement
+        // This will be applied automatically when the completion item is selected
+        const importStatement = `import "${symbol.packagePath}"\n`;
+        const firstLine = document.lineAt(0);
+        item.additionalTextEdits = [
+          vscode.TextEdit.insert(firstLine.range.start, importStatement)
+        ];
+      }
+      
+      // After insertion, we'll execute a command to replace the symbol with its package-qualified version
+      const isFunctionWithParams = symbol.kind === 'func' && symbol.signature && symbol.signature.includes('(');
+      const packagePrefixReplacement = `${packageName}.${symbol.name}${isFunctionWithParams ? '' : ''}`;
+      
       item.command = {
-        title: 'Add Import and Package Prefix',
+        title: 'Add Package Prefix',
         command: 'editor.action.insertSnippet',
         arguments: [{
-          snippet: `${packageName}.${symbol.name}${symbol.kind === 'func' ? '($0)' : ''}`,
+          snippet: packagePrefixReplacement + (isFunctionWithParams ? '($0)' : '')
         }]
       };
-      
-      // If we need to add the import, chain another command
-      if (needsImport) {
-        const originalCommand = item.command;
-        item.command = {
-          title: 'Add Import',
-          command: 'editor.action.codeAction',
-          arguments: [
-            document.uri,
-            { diagnostics: [], only: 'source.addImport' } as unknown as vscode.CodeActionContext,
-            symbol.packagePath
-          ]
-        };
-        
-        // After import is added, call our chain command handler to execute the next command
-        const next = originalCommand;
-        item.command = {
-          title: 'Chain Commands',
-          command: '_ij-go-symbol-completion.chainCommands',
-          arguments: [{ 
-            command: item.command.command,
-            arguments: item.command.arguments,
-            next: next
-          }]
-        };
-      }
       
       // Make VS Code prefer this item in the list
       item.sortText = `0${symbol.name}`;
