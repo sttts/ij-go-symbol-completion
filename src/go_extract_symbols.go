@@ -59,9 +59,31 @@ var (
 
 // logCommand logs command execution details to stderr based on verbosity level
 func logCommand(cmd *exec.Cmd) {
-	if *verbosityLevel >= 2 {
-		fmt.Fprintf(os.Stderr, "DEBUG: Executing command: %s\n", cmd.Path)
-		fmt.Fprintf(os.Stderr, "DEBUG: Working directory: %s\n", cmd.Dir)
+	if *verbosityLevel >= 3 {
+		fmt.Fprintf(os.Stderr, "DEBUG[3]: Executing command: %s\n", cmd.Path)
+		fmt.Fprintf(os.Stderr, "DEBUG[3]: Working directory: %s\n", cmd.Dir)
+	}
+}
+
+// logCommandResult logs command result based on success/failure and verbosity level
+func logCommandResult(cmd *exec.Cmd, err error, output []byte) {
+	if err != nil {
+		// Always log failed commands at verbosity level 1
+		fmt.Fprintf(os.Stderr, "DEBUG[1]: Command failed: %s\n", cmd.Path)
+		fmt.Fprintf(os.Stderr, "DEBUG[1]: Error: %v\n", err)
+		if len(output) > 0 {
+			// Log a limited portion of the output to avoid overwhelming logs
+			outputStr := string(output)
+			if len(outputStr) > 500 {
+				outputStr = outputStr[:500] + "... (truncated)"
+			}
+			fmt.Fprintf(os.Stderr, "DEBUG[1]: Output: %s\n", outputStr)
+		}
+	} else if *verbosityLevel >= 3 {
+		// Only log successful commands at high verbosity
+		if *verbose {
+			fmt.Fprintf(os.Stderr, "DEBUG[3]: Command succeeded: %s\n", cmd.Path)
+		}
 	}
 }
 
@@ -169,7 +191,9 @@ func main() {
 	cmd := exec.Command("go", "mod", "tidy")
 	cmd.Dir = tempDir
 	logCommand(cmd)
-	if err := cmd.Run(); err != nil {
+	cmdOutput, err := cmd.CombinedOutput()
+	logCommandResult(cmd, err, cmdOutput)
+	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error setting up module with go mod tidy: %v\n", err)
 		// Continue anyway, as it might work for some packages
 	}
@@ -367,19 +391,21 @@ func extractPackageSymbols(pkgPath string, tempDir string, timeoutSeconds int, v
 		initCmd.Dir = tempDir
 		logCommand(initCmd)
 
-		if initOutput, initErr := initCmd.CombinedOutput(); initErr != nil {
-			fmt.Fprintf(os.Stderr, "DEBUG: Failed to initialize module: %v - %s\n", initErr, string(initOutput))
+		initOutput, initErr := initCmd.CombinedOutput()
+		logCommandResult(initCmd, initErr, initOutput)
+		if initErr != nil {
+			debugLog(2, "Failed to initialize module: %v", initErr)
 		} else {
-			fmt.Fprintf(os.Stderr, "DEBUG: Successfully initialized new module\n")
+			debugLog(2, "Successfully initialized new module")
 		}
 
 		// Create an empty go.sum file
 		goSumPath := filepath.Join(tempDir, "go.sum")
 		if _, err := os.Stat(goSumPath); os.IsNotExist(err) {
 			if err := ioutil.WriteFile(goSumPath, []byte{}, 0644); err != nil {
-				fmt.Fprintf(os.Stderr, "DEBUG: Failed to create empty go.sum: %v\n", err)
+				debugLog(2, "Failed to create empty go.sum: %v", err)
 			} else {
-				fmt.Fprintf(os.Stderr, "DEBUG: Created empty go.sum file\n")
+				debugLog(2, "Created empty go.sum file")
 			}
 		}
 
@@ -396,9 +422,9 @@ func main() {
 `
 		mainGoPath := filepath.Join(tempDir, "main.go")
 		if err := ioutil.WriteFile(mainGoPath, []byte(mainGoContent), 0644); err != nil {
-			fmt.Fprintf(os.Stderr, "DEBUG: Failed to create main.go: %v\n", err)
+			debugLog(2, "Failed to create main.go: %v", err)
 		} else {
-			fmt.Fprintf(os.Stderr, "DEBUG: Created main.go with import for %s\n", pkgPath)
+			debugLog(2, "Created main.go with import for %s", pkgPath)
 		}
 
 		// Try download with mod download - ignoring errors since we'll verify later
@@ -406,20 +432,23 @@ func main() {
 		dlCmd.Dir = tempDir
 		logCommand(dlCmd)
 
-		if dlOutput, dlErr := dlCmd.CombinedOutput(); dlErr != nil {
-			fmt.Fprintf(os.Stderr, "DEBUG: mod download warning (continuing): %v - %s\n", dlErr, string(dlOutput))
+		dlOutput, dlErr := dlCmd.CombinedOutput()
+		logCommandResult(dlCmd, dlErr, dlOutput)
+		if dlErr != nil {
+			debugLog(2, "mod download warning (continuing): %v", dlErr)
 		} else {
-			fmt.Fprintf(os.Stderr, "DEBUG: Successfully downloaded modules\n")
+			debugLog(2, "Successfully downloaded modules")
 		}
 
 		// Add the specific module as a requirement using go get
-		// This is the most important step - directly add the package
 		getCmd := exec.CommandContext(ctx, "go", "get", "-d", pkgPath)
 		getCmd.Dir = tempDir
 		logCommand(getCmd)
 
-		if getOutput, getErr := getCmd.CombinedOutput(); getErr != nil {
-			fmt.Fprintf(os.Stderr, "DEBUG: Failed to add module dependency: %v - %s\n", getErr, string(getOutput))
+		getOutput, getErr := getCmd.CombinedOutput()
+		logCommandResult(getCmd, getErr, getOutput)
+		if getErr != nil {
+			debugLog(2, "Failed to add module dependency: %v", getErr)
 
 			// Try to add the module root if adding the specific package failed
 			if moduleRoot != pkgPath {
@@ -427,14 +456,16 @@ func main() {
 				rootGetCmd.Dir = tempDir
 				logCommand(rootGetCmd)
 
-				if rootOutput, rootErr := rootGetCmd.CombinedOutput(); rootErr != nil {
-					fmt.Fprintf(os.Stderr, "DEBUG: Failed to add module root dependency: %v - %s\n", rootErr, string(rootOutput))
+				rootOutput, rootErr := rootGetCmd.CombinedOutput()
+				logCommandResult(rootGetCmd, rootErr, rootOutput)
+				if rootErr != nil {
+					debugLog(2, "Failed to add module root dependency: %v", rootErr)
 				} else {
-					fmt.Fprintf(os.Stderr, "DEBUG: Successfully added module root dependency: %s\n", moduleRoot)
+					debugLog(2, "Successfully added module root dependency: %s", moduleRoot)
 				}
 			}
 		} else {
-			fmt.Fprintf(os.Stderr, "DEBUG: Successfully added module dependency: %s\n", pkgPath)
+			debugLog(2, "Successfully added module dependency: %s", pkgPath)
 		}
 
 		// Run go mod tidy with -e flag to ignore errors
@@ -442,14 +473,16 @@ func main() {
 		tidyCmd.Dir = tempDir
 		logCommand(tidyCmd)
 
-		if tidyOutput, tidyErr := tidyCmd.CombinedOutput(); tidyErr != nil {
-			fmt.Fprintf(os.Stderr, "DEBUG: go mod tidy failed: %v - %s\n", tidyErr, string(tidyOutput))
+		tidyOutput, tidyErr := tidyCmd.CombinedOutput()
+		logCommandResult(tidyCmd, tidyErr, tidyOutput)
+		if tidyErr != nil {
+			debugLog(2, "go mod tidy failed: %v", tidyErr)
 		} else {
-			fmt.Fprintf(os.Stderr, "DEBUG: Successfully tidied module dependencies\n")
+			debugLog(2, "Successfully tidied module dependencies")
 		}
 
 		// Now try to use the Go module to extract information
-		fmt.Fprintf(os.Stderr, "DEBUG: Trying to extract information using go list with JSON output\n")
+		debugLog(2, "Trying to extract information using go list with JSON output")
 
 		// Try downloading the package after it's been properly added to go.mod
 		// First build the module to ensure it's fully downloaded
@@ -458,7 +491,8 @@ func main() {
 		logCommand(buildCmd)
 
 		// Ignore build errors, we're just trying to force module download
-		buildCmd.CombinedOutput()
+		buildOutput, buildErr := buildCmd.CombinedOutput()
+		logCommandResult(buildCmd, buildErr, buildOutput)
 
 		// Now try to get the package info
 		cmd = exec.CommandContext(ctx, "go", "list", "-json", "-m", "all")
@@ -466,8 +500,9 @@ func main() {
 		logCommand(cmd)
 
 		modOutput, modErr := cmd.CombinedOutput()
-		if modErr == nil && verbose {
-			fmt.Fprintf(os.Stderr, "DEBUG: Module list: %s\n", string(modOutput))
+		logCommandResult(cmd, modErr, modOutput)
+		if modErr == nil && *verbosityLevel >= 3 {
+			debugLog(3, "Module list sample: %s", truncateOutput(string(modOutput), 500))
 		}
 
 		// Try to get package documentation which is often more reliable
@@ -476,22 +511,23 @@ func main() {
 		logCommand(docCmd)
 
 		docOutput, docErr := docCmd.CombinedOutput()
+		logCommandResult(docCmd, docErr, docOutput)
 		var result *PackageSymbols
 
 		if docErr == nil {
-			fmt.Fprintf(os.Stderr, "DEBUG: Successfully got docs, size: %d bytes\n", len(docOutput))
+			debugLog(1, "Successfully got docs, size: %d bytes", len(docOutput))
 			// We got some documentation, try to extract symbols from it
 			result = createMinimalPackageSymbols(pkgPath)
 			parseDocOutput(string(docOutput), result)
 
 			// If we found symbols, return the result
 			if len(result.Functions) > 0 || len(result.Types) > 0 || len(result.Variables) > 0 {
-				fmt.Fprintf(os.Stderr, "DEBUG: Extracted %d functions, %d types, %d variables from %s using docs\n",
+				debugLog(1, "Extracted %d functions, %d types, %d variables from %s using docs",
 					len(result.Functions), len(result.Types), len(result.Variables), pkgPath)
 				return result, nil
 			}
 		} else {
-			fmt.Fprintf(os.Stderr, "DEBUG: Failed to get docs: %v\n", docErr)
+			debugLog(2, "Failed to get docs: %v", docErr)
 		}
 
 		// Final attempt - try with go list with modules
@@ -500,8 +536,9 @@ func main() {
 		logCommand(cmd)
 
 		output, err = cmd.CombinedOutput()
+		logCommandResult(cmd, err, output)
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "DEBUG: Failed to list package: %v\n", err)
+			debugLog(2, "Failed to list package: %v", err)
 
 			// If we already have some info from docs, use that
 			if result != nil && (len(result.Functions) > 0 || len(result.Types) > 0 || len(result.Variables) > 0) {
@@ -815,4 +852,12 @@ func isTitleCase(s string) bool {
 	}
 	firstChar := s[0:1]
 	return firstChar == strings.ToUpper(firstChar) && firstChar != strings.ToLower(firstChar)
+}
+
+// truncateOutput truncates the output to a specified length
+func truncateOutput(output string, length int) string {
+	if len(output) > length {
+		return output[:length] + "..."
+	}
+	return output
 }
