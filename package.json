@@ -2,7 +2,7 @@
   "name": "ij-go-symbol-completion",
   "displayName": "Go Symbol Completion",
   "description": "IntelliJ-like Go symbol completion with or without package prefix",
-  "version": "0.0.49",
+  "version": "0.0.50",
   "publisher": "sttts",
   "engines": {
     "vscode": "^1.60.0"
