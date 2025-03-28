@@ -109,10 +109,22 @@ export class GoSymbolCache {
         logger.log("Successfully loaded symbol cache from disk");
         this.initialized = true;
         
+        // Get the packages that need to be reprocessed (changed packages)
+        const reprocessPackages = await this.getOutdatedPackages();
+        
         // Still initialize common packages in the background if needed
         if (!this.initializedCommonPackages) {
+          logger.log("Common packages not initialized, will initialize them in background");
           this.initializeCommonPackages().catch(err => {
             logger.log(`Error initializing common packages in background: ${err instanceof Error ? err.message : String(err)}`);
+          });
+        }
+        
+        // If there are outdated packages, process them in the background
+        if (reprocessPackages.length > 0) {
+          logger.log(`Found ${reprocessPackages.length} outdated packages to reprocess in background`);
+          this.extractSymbolsFromPackages(reprocessPackages).catch(err => {
+            logger.log(`Error reprocessing outdated packages: ${err instanceof Error ? err.message : String(err)}`);
           });
         }
         
@@ -134,6 +146,38 @@ export class GoSymbolCache {
     } finally {
       this.initializing = false;
     }
+  }
+  
+  /**
+   * Get packages that need to be processed or reprocessed
+   */
+  private async getOutdatedPackages(): Promise<string[]> {
+    const outdatedPackages: string[] = [];
+    
+    try {
+      // Get all Go packages
+      const limitToDirectDeps = true; // For better performance
+      const allPackages = await this.getAllGoPackages(limitToDirectDeps);
+      logger.log(`Found ${allPackages.length} Go packages to check for outdated status`);
+      
+      // Check which packages have changed versions or are new
+      const changedPackages = await this.getChangedWorkspacePackages();
+      
+      for (const pkg of allPackages) {
+        // Package should be reprocessed if:
+        // 1. It's a new package we haven't indexed before
+        // 2. It's a package with a changed version
+        if (!this.indexedPackages.has(pkg) || changedPackages.has(pkg)) {
+          outdatedPackages.push(pkg);
+        }
+      }
+      
+      logger.log(`Identified ${outdatedPackages.length} packages that need indexing or re-indexing`);
+    } catch (error) {
+      logger.log(`Error determining outdated packages: ${error instanceof Error ? error.message : String(error)}`);
+    }
+    
+    return outdatedPackages;
   }
   
   /**
@@ -198,14 +242,26 @@ export class GoSymbolCache {
         processedPackagesList = Array.from(this.indexedPackages.keys());
       }
       
-      // Check if package versions have changed in the workspace
-      const workspaceVersionsChanged = await this.haveWorkspacePackagesChanged();
-      if (workspaceVersionsChanged) {
-        logger.log("Workspace package versions have changed, rebuilding cache");
-        // Clear the cache but return true so we don't show an error
-        this.symbols = new Map();
-        this.indexedPackages = new Map();
-        return false;
+      // Check if package versions have changed in the workspace and update only those packages
+      const changedPackages = await this.getChangedWorkspacePackages();
+      if (changedPackages.size > 0) {
+        logger.log(`${changedPackages.size} workspace package versions have changed, selectively updating cache`);
+        
+        // Remove symbols from changed packages
+        this.removeSymbolsForPackages(Array.from(changedPackages.keys()));
+        
+        // Remove changed packages from indexed packages
+        for (const pkg of changedPackages.keys()) {
+          this.indexedPackages.delete(pkg);
+        }
+        
+        // Update indexedPackages with new versions
+        for (const [pkg, version] of changedPackages.entries()) {
+          this.indexedPackages.set(pkg, version);
+        }
+        
+        // We still consider the cache successfully loaded, but we'll update the changed packages later
+        logger.log(`Removed symbols for ${changedPackages.size} changed packages, will re-index them`);
       }
       
       logger.log(`Loaded ${this.symbols.size} symbols from cache, covering ${this.indexedPackages.size} packages`);
@@ -215,6 +271,62 @@ export class GoSymbolCache {
       logger.log(`Error loading cache from disk: ${error instanceof Error ? error.message : String(error)}`);
       return false;
     }
+  }
+  
+  /**
+   * Get packages that have changed versions in the workspace
+   */
+  private async getChangedWorkspacePackages(): Promise<Map<string, string>> {
+    const changedPackages = new Map<string, string>();
+    
+    try {
+      // Get current workspace package versions
+      const currentVersions = await this.getWorkspacePackageVersions();
+      
+      // Compare with cached versions
+      for (const [pkg, version] of currentVersions) {
+        const cachedVersion = this.indexedPackages.get(pkg);
+        if (cachedVersion !== version) {
+          logger.log(`Package version changed: ${pkg} was ${cachedVersion}, now ${version}`);
+          changedPackages.set(pkg, version);
+        }
+      }
+    } catch (error) {
+      logger.log(`Error checking workspace packages: ${error instanceof Error ? error.message : String(error)}`);
+    }
+    
+    return changedPackages;
+  }
+  
+  /**
+   * Remove symbols belonging to specified packages
+   */
+  private removeSymbolsForPackages(packages: string[]): void {
+    if (packages.length === 0) {
+      return;
+    }
+    
+    const packageSet = new Set(packages);
+    let removedSymbolCount = 0;
+    
+    // Create a list of symbols and the packages they're from
+    for (const [symbolName, symbols] of this.symbols.entries()) {
+      // Filter out symbols from the changed packages
+      const filteredSymbols = symbols.filter(symbol => !packageSet.has(symbol.packagePath));
+      
+      // Update the count of removed symbols
+      removedSymbolCount += symbols.length - filteredSymbols.length;
+      
+      if (filteredSymbols.length === 0) {
+        // If no symbols left, remove the entry
+        this.symbols.delete(symbolName);
+      } else if (filteredSymbols.length !== symbols.length) {
+        // If some symbols were removed, update the entry
+        this.symbols.set(symbolName, filteredSymbols);
+      }
+    }
+    
+    logger.log(`Removed ${removedSymbolCount} symbols from ${packages.length} packages`);
   }
   
   /**
@@ -464,6 +576,11 @@ export class GoSymbolCache {
       if (packagesToProcess.length === 0) {
         logger.log("All packages are already indexed - indexing is complete");
         return;
+      }
+      
+      // Log which packages will be processed
+      if (packagesToProcess.length > 0) {
+        logger.log(`Indexing packages (sample): ${packagesToProcess.slice(0, Math.min(5, packagesToProcess.length)).join(', ')}`);
       }
       
       // Process packages in batches for better responsiveness
