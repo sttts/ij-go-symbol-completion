@@ -1,0 +1,13 @@
+.vscode/**
+.vscode-test/**
+src/**
+!src/go_extract_symbols.go
+!src/go_extract_symbols_test.go
+.gitignore
+.yarnrc
+**/tsconfig.json
+**/.eslintrc.json
+**/*.map
+**/*.ts
+!dist/go_extract_symbols.go
+node_modules/** 
