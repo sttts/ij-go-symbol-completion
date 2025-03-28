@@ -77,42 +77,32 @@ export class GoSymbolCompletionProvider implements vscode.CompletionItemProvider
       // Use the package name as a label suffix to help users identify the package
       item.label = {
         label: symbol.name,
-        detail: ` - ${packageName}`
+        detail: ` - ${symbol.packagePath}`
       };
       
       item.filterText = symbol.name;
       
-      // We will insert only the symbol name initially
-      item.insertText = symbol.name;
-      
-      // For functions, add signature information
-      if (symbol.kind === 'func' && symbol.signature) {
-        const snippetText = this.createFunctionSnippet(symbol.name, symbol.signature);
-        item.insertText = new vscode.SnippetString(snippetText);
-      }
-      
-      // Add additional text edit to import the package if needed
-      if (needsImport) {
-        // Create an additional edit to add the import statement
-        // This will be applied automatically when the completion item is selected
-        const importStatement = `import "${symbol.packagePath}"\n`;
-        const firstLine = document.lineAt(0);
-        item.additionalTextEdits = [
-          vscode.TextEdit.insert(firstLine.range.start, importStatement)
-        ];
-      }
-      
-      // After insertion, we'll execute a command to replace the symbol with its package-qualified version
+      // For quick replace, we'll directly insert the qualified name
       const isFunctionWithParams = symbol.kind === 'func' && symbol.signature && symbol.signature.includes('(');
-      const packagePrefixReplacement = `${packageName}.${symbol.name}${isFunctionWithParams ? '' : ''}`;
+      const packagePrefixedName = `${packageName}.${symbol.name}`;
       
-      item.command = {
-        title: 'Add Package Prefix',
-        command: 'editor.action.insertSnippet',
-        arguments: [{
-          snippet: packagePrefixReplacement + (isFunctionWithParams ? '($0)' : '')
-        }]
-      };
+      if (isFunctionWithParams) {
+        // For functions, add signature information with package prefix
+        const snippetText = this.createFunctionSnippet(packagePrefixedName, symbol.signature);
+        item.insertText = new vscode.SnippetString(snippetText);
+      } else {
+        // For non-functions, insert the qualified name directly
+        item.insertText = packagePrefixedName;
+      }
+      
+      // Add command to add the import
+      if (needsImport) {
+        item.command = {
+          title: 'Add Import',
+          command: 'go.import.add',
+          arguments: [symbol.packagePath || '']
+        };
+      }
       
       // Make VS Code prefer this item in the list
       item.sortText = `0${symbol.name}`;
