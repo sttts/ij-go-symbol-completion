@@ -2189,29 +2189,120 @@ export class GoSymbolCache {
       // Always include the base package
       packagesToReindex.push(packagePath);
       
-      // Try to get subpackages
+      // Try to get subpackages using go list command
       try {
-        const output = await this.execCommand(`go list ${packagePath}/...`, {
+        // Use a more direct approach to list packages with the -json flag to get detailed information
+        const output = await this.execCommand(`go list -json ${packagePath}/...`, {
           cwd,
           silent: true,
-          maxBuffer: 2 * 1024 * 1024
+          maxBuffer: 10 * 1024 * 1024 // 10MB buffer for large output
         });
         
         if (output && output.trim()) {
-          const subPackages = output.trim().split('\n')
-            .map(line => line.trim())
-            .filter(line => line && !line.includes('no Go files'));
+          // Parse the JSON output - it will be a stream of JSON objects, one per line
+          const jsonLines = output.trim().split('\n');
           
-          // Add unique subpackages
-          for (const pkg of subPackages) {
-            if (!packagesToReindex.includes(pkg)) {
-              packagesToReindex.push(pkg);
+          for (const line of jsonLines) {
+            try {
+              const pkgInfo = JSON.parse(line);
+              if (pkgInfo.ImportPath && !packagesToReindex.includes(pkgInfo.ImportPath)) {
+                packagesToReindex.push(pkgInfo.ImportPath);
+                logger.log(`Found subpackage: ${pkgInfo.ImportPath}`);
+              }
+            } catch (jsonError) {
+              logger.log(`Error parsing JSON for subpackage: ${jsonError instanceof Error ? jsonError.message : String(jsonError)}`);
             }
           }
         }
       } catch (error) {
-        // If error getting subpackages, just continue with the base package
-        logger.log(`Error getting subpackages for ${packagePath}: ${error instanceof Error ? error.message : String(error)}`);
+        logger.log(`Error getting subpackages with json format for ${packagePath}: ${error instanceof Error ? error.message : String(error)}`);
+        
+        // Try with plain text output as fallback
+        try {
+          const output = await this.execCommand(`go list ${packagePath}/...`, {
+            cwd,
+            silent: true,
+            maxBuffer: 2 * 1024 * 1024
+          });
+          
+          if (output && output.trim()) {
+            const subPackages = output.trim().split('\n')
+              .map(line => line.trim())
+              .filter(line => line);
+            
+            // Add unique subpackages
+            for (const pkg of subPackages) {
+              if (!packagesToReindex.includes(pkg)) {
+                packagesToReindex.push(pkg);
+                logger.log(`Found subpackage: ${pkg}`);
+              }
+            }
+          }
+        } catch (plainError) {
+          logger.log(`Error getting subpackages with plain format for ${packagePath}: ${plainError instanceof Error ? plainError.message : String(plainError)}`);
+        }
+      }
+      
+      // If we failed to discover subpackages, try with a different approach using go modules
+      if (packagesToReindex.length <= 1) {
+        logger.log(`No subpackages found with direct listing, trying module-based approach...`);
+        
+        // Try to determine if this is a module in go.mod
+        try {
+          const goModOutput = await this.execCommand(`go list -m all`, {
+            cwd,
+            silent: true
+          });
+          
+          if (goModOutput && goModOutput.trim()) {
+            const modules = goModOutput.trim().split('\n');
+            
+            // Find if our package is part of a module or is a module itself
+            let modulePrefix = "";
+            for (const modLine of modules) {
+              const parts = modLine.trim().split(/\s+/);
+              const modName = parts[0];
+              
+              if (packagePath === modName || packagePath.startsWith(modName + '/')) {
+                modulePrefix = modName;
+                break;
+              }
+            }
+            
+            if (modulePrefix) {
+              logger.log(`Found module prefix: ${modulePrefix} for package: ${packagePath}`);
+              
+              // Get all packages for this module
+              try {
+                const modulePackagesOutput = await this.execCommand(`go list ${modulePrefix}/...`, {
+                  cwd,
+                  silent: true,
+                  maxBuffer: 5 * 1024 * 1024
+                });
+                
+                if (modulePackagesOutput && modulePackagesOutput.trim()) {
+                  const modulePackages = modulePackagesOutput.trim().split('\n')
+                    .map(line => line.trim())
+                    .filter(line => line);
+                  
+                  // Filter packages to include only those under our packagePath
+                  for (const pkg of modulePackages) {
+                    if (pkg === packagePath || pkg.startsWith(packagePath + '/')) {
+                      if (!packagesToReindex.includes(pkg)) {
+                        packagesToReindex.push(pkg);
+                        logger.log(`Found module subpackage: ${pkg}`);
+                      }
+                    }
+                  }
+                }
+              } catch (modulePackagesError) {
+                logger.log(`Error listing module packages: ${modulePackagesError instanceof Error ? modulePackagesError.message : String(modulePackagesError)}`);
+              }
+            }
+          }
+        } catch (modError) {
+          logger.log(`Error getting modules: ${modError instanceof Error ? modError.message : String(modError)}`);
+        }
       }
       
       logger.log(`Found ${packagesToReindex.length} packages to reindex: ${packagesToReindex.join(', ')}`);
