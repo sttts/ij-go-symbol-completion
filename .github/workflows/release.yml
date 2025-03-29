@@ -47,4 +47,9 @@ jobs:
         name: Release ${{ github.ref_name }}
         draft: false
         prerelease: false
-        generate_release_notes: true 
+        generate_release_notes: true
+        
+    - name: Publish to VS Code Marketplace
+      run: vsce publish -p ${{ secrets.VSCE_PAT }} --no-dependencies
+      env:
+        VSCE_PAT: ${{ secrets.VSCE_PAT }} 
