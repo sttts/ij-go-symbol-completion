@@ -42,7 +42,7 @@ jobs:
       run: npm run compile-tests
       
     - name: Run tests
-      run: mocha out/**/*.test.js
+      run: npx mocha out/**/*.test.js
       
     - name: Upload test logs
       if: always()
