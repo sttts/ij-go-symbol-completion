@@ -408,7 +408,8 @@ export class GoSymbolCache {
     
     try {
       // Get all Go packages
-      const limitToDirectDeps = true; // For better performance
+      const config = vscode.workspace.getConfiguration('goSymbolCompletion');
+      const limitToDirectDeps = config.get<boolean>('limitToDirectDeps', true);
       const allPackages = await this.getAllGoPackages(limitToDirectDeps);
       logger.log(`Found ${allPackages.length} Go packages to check for outdated status`, 2);
       
@@ -418,17 +419,53 @@ export class GoSymbolCache {
       // Count how many are truly new vs changed
       let newPackages = 0;
       let changedVersions = 0;
+      let debugReasons: {pkg: string, reason: string}[] = [];
       
       for (const pkg of allPackages) {
+        // Store reasons for the first 5 packages
+        let reindexReason = '';
+        
         // Package should be reprocessed if:
         // 1. It's a new package we haven't indexed before
         // 2. It's a package with a changed version
+        // 3. Its package info is missing or outdated
         if (!this.indexedPackages.has(pkg)) {
           outdatedPackages.push(pkg);
+          reindexReason = 'New package not previously indexed';
           newPackages++;
         } else if (changedPackages.has(pkg)) {
           outdatedPackages.push(pkg);
+          const oldVer = this.indexedPackages.get(pkg);
+          const newVer = changedPackages.get(pkg);
+          reindexReason = `Version changed from ${oldVer} to ${newVer}`;
           changedVersions++;
+        } else {
+          // Additional checks to avoid unnecessary reindexing
+          const pkgInfo = this.packageInfo.get(pkg);
+          
+          // Skip reindexing if package info exists and is recent
+          if (pkgInfo && Date.now() - pkgInfo.timestamp < 7 * 24 * 60 * 60 * 1000) {
+            // Package was indexed within the last 7 days, skip
+            continue;
+          } else if (!pkgInfo) {
+            // Missing package info means we should reindex
+            outdatedPackages.push(pkg);
+            reindexReason = 'Missing package metadata';
+          } else {
+            // We have metadata but it's old - only reindex workspace packages
+            if (this.isWorkspacePackage(pkg)) {
+              outdatedPackages.push(pkg);
+              reindexReason = `Old metadata (${new Date(pkgInfo.timestamp).toISOString()})`;
+            } else {
+              // For non-workspace packages, we don't need to reindex as frequently
+              continue;
+            }
+          }
+        }
+        
+        // Store debug info for the first 5 packages
+        if (debugReasons.length < 5 && reindexReason) {
+          debugReasons.push({pkg, reason: reindexReason});
         }
       }
       
@@ -436,6 +473,15 @@ export class GoSymbolCache {
       if (outdatedPackages.length > 0) {
         logger.log(`  - ${newPackages} new packages not previously indexed`, 2);
         logger.log(`  - ${changedVersions} packages with changed versions`, 2);
+        logger.log(`  - ${outdatedPackages.length - newPackages - changedVersions} packages with outdated metadata`, 2);
+        
+        // Log first 5 packages and why they're being reindexed
+        if (debugReasons.length > 0) {
+          logger.log(`First ${debugReasons.length} packages being reindexed:`, 1);
+          debugReasons.forEach(({pkg, reason}, i) => {
+            logger.log(`  [${i+1}] ${pkg}: ${reason}`, 1);
+          });
+        }
       }
     } catch (error) {
       logger.log(`Error determining outdated packages: ${error instanceof Error ? error.message : String(error)}`, 1);
