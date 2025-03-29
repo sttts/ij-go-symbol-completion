@@ -108,7 +108,7 @@ export async function activate(context: vscode.ExtensionContext) {
   
   // Register command to handle command chaining
   context.subscriptions.push(
-    vscode.commands.registerCommand('_ij-go-symbol-completion.chainCommands', async (cmdWithNext) => {
+    vscode.commands.registerCommand('_go-symbol-completion.chainCommands', async (cmdWithNext) => {
       // Execute the next command stored in the 'next' property
       if (cmdWithNext && cmdWithNext.next) {
         // Wait a bit for the current command to complete
@@ -128,7 +128,7 @@ export async function activate(context: vscode.ExtensionContext) {
   
   // Register command to show the symbol cache
   context.subscriptions.push(
-    vscode.commands.registerCommand('ij-go-symbol-completion.showSymbolCache', () => {
+    vscode.commands.registerCommand('go-symbol-completion.showSymbolCache', () => {
       // Force fresh info by accessing the latest data
       const freshSymbolCache = getOrCreateSymbolCache();
       const cacheContents = freshSymbolCache.getDebugInfo(true); // Pass true to show all symbols
@@ -146,7 +146,7 @@ export async function activate(context: vscode.ExtensionContext) {
   
   // Register command to show debug info for a specific package
   context.subscriptions.push(
-    vscode.commands.registerCommand('ij-go-symbol-completion.showPackageInfo', async () => {
+    vscode.commands.registerCommand('go-symbol-completion.showPackageInfo', async () => {
       // Prompt user for package path
       const packagePath = await vscode.window.showInputBox({
         prompt: 'Enter the full package path to debug (e.g., github.com/user/repo/pkg)',
@@ -167,7 +167,7 @@ export async function activate(context: vscode.ExtensionContext) {
   
   // Register command to reindex a specific package (e.g., when it's updated)
   context.subscriptions.push(
-    vscode.commands.registerCommand('ij-go-symbol-completion.reindexPackage', async () => {
+    vscode.commands.registerCommand('go-symbol-completion.reindexPackage', async () => {
       // Prompt user for package path
       const packagePath = await vscode.window.showInputBox({
         prompt: 'Enter the full package path to reindex (e.g., github.com/user/repo/pkg)',
@@ -210,7 +210,7 @@ export async function activate(context: vscode.ExtensionContext) {
 function registerReindexPackageCommand(context: vscode.ExtensionContext) {
   // Register a command that can be invoked from the context menu
   context.subscriptions.push(
-    vscode.commands.registerCommand('ij-go-symbol-completion.reindexPackage', async () => {
+    vscode.commands.registerCommand('go-symbol-completion.reindexPackage', async () => {
       const editor = vscode.window.activeTextEditor;
       if (!editor) {
         vscode.window.showInformationMessage('No active editor');
@@ -247,18 +247,22 @@ function registerReindexPackageCommand(context: vscode.ExtensionContext) {
 
   // Add the command to editor context menu
   context.subscriptions.push(
-    vscode.commands.registerTextEditorCommand('ij-go-symbol-completion.reindexPackageFromContext', async (editor) => {
+    vscode.commands.registerTextEditorCommand('go-symbol-completion.reindexPackageFromContext', async (editor) => {
       if (editor.document.languageId !== 'go') {
         vscode.window.showInformationMessage('Not a Go file');
         return;
       }
 
-      const packageName = extractPackageFromImportAtPosition(editor.document, editor.selection.active);
-      if (packageName) {
-        await reindexPackage(packageName);
-      } else {
-        vscode.window.showInformationMessage('No Go package found at cursor position');
+      // Extract package name from the current cursor position
+      const position = editor.selection.active;
+      const packageName = extractPackageFromImportAtPosition(editor.document, position);
+
+      if (!packageName) {
+        vscode.window.showInformationMessage('No package found at cursor position');
+        return;
       }
+
+      await reindexPackage(packageName);
     })
   );
 }
@@ -374,7 +378,7 @@ function initializeExtension(context: vscode.ExtensionContext) {
   
   // Register a command to show the symbol cache (for debugging/verification)
   context.subscriptions.push(
-    vscode.commands.registerCommand('ij-go-symbol-completion.showSymbolCache', () => {
+    vscode.commands.registerCommand('go-symbol-completion.showSymbolCache', () => {
       // Force fresh info by accessing the latest data
       const freshSymbolCache = getOrCreateSymbolCache();
       const cacheContents = freshSymbolCache.getDebugInfo(true); // Pass true to show all symbols

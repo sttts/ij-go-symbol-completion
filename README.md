@@ -1,7 +1,7 @@
 # Go Symbol Completion for VS Code
 
-[![Tests](https://github.com/sttts/ij-go-symbol-completion/actions/workflows/tests.yml/badge.svg)](https://github.com/sttts/ij-go-symbol-completion/actions/workflows/tests.yml)
-[![Release](https://img.shields.io/github/v/release/sttts/ij-go-symbol-completion)](https://github.com/sttts/ij-go-symbol-completion/releases/latest)
+[![Tests](https://github.com/sttts/vscode-go-symbol-completion/actions/workflows/tests.yml/badge.svg)](https://github.com/sttts/vscode-go-symbol-completion/actions/workflows/tests.yml)
+[![Release](https://img.shields.io/github/v/release/sttts/vscode-go-symbol-completion)](https://github.com/sttts/vscode-go-symbol-completion/releases/latest)
 
 > ⚠️ **EXPERIMENTAL**: This extension is an experiment in using [Cursor](https://cursor.sh) exclusively for development. **100% of the code was written without human modification** - all coding, debugging, and optimization was done through Cursor's AI interfaces, without direct human editing of the codebase.
 
@@ -39,7 +39,7 @@ The built-in Go extension for VS Code requires you to type the full package name
 4. Click Install
 
 ### Option 2: Manual Installation
-1. Download the `.vsix` file from the [GitHub releases page](https://github.com/sttts/ij-go-symbol-completion/releases)
+1. Download the `.vsix` file from the [GitHub releases page](https://github.com/sttts/vscode-go-symbol-completion/releases)
 2. In VS Code, go to Extensions (Ctrl+Shift+X)
 3. Click "..." in the top-right and select "Install from VSIX..."
 4. Choose the downloaded file

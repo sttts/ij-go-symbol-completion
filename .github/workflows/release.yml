@@ -43,7 +43,7 @@ jobs:
       id: create_release
       uses: softprops/action-gh-release@v1
       with:
-        files: ./ij-go-symbol-completion-*.vsix
+        files: ./go-symbol-completion-*.vsix
         name: Release ${{ github.ref_name }}
         draft: false
         prerelease: false
