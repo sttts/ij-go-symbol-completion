@@ -3,21 +3,17 @@
 [![Tests](https://github.com/sttts/ij-go-symbol-completion/actions/workflows/tests.yml/badge.svg)](https://github.com/sttts/ij-go-symbol-completion/actions/workflows/tests.yml)
 [![Release](https://img.shields.io/github/v/release/sttts/ij-go-symbol-completion)](https://github.com/sttts/ij-go-symbol-completion/releases/latest)
 
-> ⚠️ **EXPERIMENTAL**: This extension is an experiment in using [Cursor](https://cursor.sh) exclusively for development. **100% of the code was written without human modification** - all coding, debugging, and optimization was done through Cursor's AI interfaces, without direct human editing of the codebase. This serves as a demonstration of what's possible with modern AI-assisted development tools.
+> ⚠️ **EXPERIMENTAL**: This extension is an experiment in using [Cursor](https://cursor.sh) exclusively for development. **100% of the code was written without human modification** - all coding, debugging, and optimization was done through Cursor's AI interfaces, without direct human editing of the codebase.
 
 A VS Code extension that provides symbol completion for Go code with or without package prefixes (similar to other popular IDEs), drastically improving the Go development experience in VS Code.
 
 ![Go Symbol Completion in action](contrib/screencast.gif)
 
-> 🚀 **For Go developers tired of subpar symbol completion**
->
-> This extension solves one of the biggest frustrations in VS Code Go development: the inability to autocomplete symbols without typing the full package prefix.
-
 ## Motivation
 
 This extension was born out of a common frustration among Go developers transitioning from other popular IDEs to VS Code:
 
-![Twitter motivation](contrib/tweet.png)
+<img src="contrib/tweet.png" width="50%" alt="Twitter motivation">
 
 The built-in Go extension for VS Code requires you to type the full package name before offering completions. With this extension, you can type just the symbol name (like in other popular IDEs) and get full completions with automatic imports.
 
@@ -81,4 +77,4 @@ Contributions are welcome! Feel free to submit issues and pull requests.
 
 ## License
 
-This project is licensed under the MIT License - see the LICENSE file for details. 
+This project is licensed under the Apache License, Version 2.0 - see the LICENSE file for details. 
