@@ -30,6 +30,35 @@ export class GoSymbolCompletionProvider implements vscode.CompletionItemProvider
       return [];
     }
     
+    // Check if this is a package-qualified completion (e.g., "fmt.")
+    const hasPackagePrefix = currentWord.includes('.');
+    
+    // If we have a package prefix, check if we should provide completions based on settings
+    if (hasPackagePrefix) {
+      const packageName = currentWord.split('.')[0];
+      
+      // Find the full package import path for this package name
+      const packagePaths = await this.findPackagePathsForName(packageName);
+      
+      // If any of the packages with this name are already imported, don't provide completions
+      // Let the native Go extension handle it
+      for (const pkgPath of packagePaths) {
+        if (this.isImportedInDocument(document, pkgPath)) {
+          logger.log(`Package ${pkgPath} is already imported, skipping completions`);
+          return [];
+        }
+      }
+      
+      // Check if user wants completions for specified packages that aren't imported
+      const config = vscode.workspace.getConfiguration('goSymbolCompletion');
+      const provideForSpecified = config.get<boolean>('provideCompletionsForSpecifiedPackages', true);
+      
+      if (!provideForSpecified) {
+        logger.log(`Skipping completions for specified package ${packageName} (not imported)`);
+        return [];
+      }
+    }
+    
     logger.log(`Looking for completions matching: "${currentWord}"`);
     
     // Find matching symbols
@@ -45,6 +74,29 @@ export class GoSymbolCompletionProvider implements vscode.CompletionItemProvider
     
     // Convert to completion items
     return symbols.map(symbol => this.symbolToCompletionItem(symbol, document, currentWord));
+  }
+  
+  /**
+   * Find all package paths for a given package name
+   * This is used to check if a package is already imported
+   */
+  private async findPackagePathsForName(packageName: string): Promise<string[]> {
+    const symbols = this.symbolCache.getAllSymbols();
+    const result = new Set<string>();
+    
+    // Look through all symbols to find those with matching package name
+    for (const [_, symbolList] of symbols) {
+      for (const symbol of symbolList) {
+        const pkgParts = symbol.packagePath.split('/');
+        const lastPart = pkgParts[pkgParts.length - 1];
+        
+        if (lastPart === packageName) {
+          result.add(symbol.packagePath);
+        }
+      }
+    }
+    
+    return Array.from(result);
   }
   
   /**

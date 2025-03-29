@@ -32,7 +32,14 @@ The built-in Go extension for VS Code requires you to type the full package name
 
 ## Installation
 
-1. Download the `.vsix` file from the [releases page](https://github.com/yourusername/ij-go-symbol-completion/releases)
+### Option 1: VS Code Marketplace
+1. Open VS Code
+2. Go to Extensions (Ctrl+Shift+X)
+3. Search for "Go Symbol Completion"
+4. Click Install
+
+### Option 2: Manual Installation
+1. Download the `.vsix` file from the [GitHub releases page](https://github.com/sttts/ij-go-symbol-completion/releases)
 2. In VS Code, go to Extensions (Ctrl+Shift+X)
 3. Click "..." in the top-right and select "Install from VSIX..."
 4. Choose the downloaded file
@@ -64,6 +71,7 @@ Right-click on any import statement to reindex a package if you've updated it.
 | `goSymbolCompletion.enabled` | Enable/disable the extension | `true` |
 | `goSymbolCompletion.debugLevel` | Log verbosity (0-3) | `1` |
 | `goSymbolCompletion.limitToDirectDeps` | Only index direct dependencies | `true` |
+| `goSymbolCompletion.provideCompletionsForSpecifiedPackages` | When a package is specified (e.g., 'fmt.') but not imported, provide completions for it | `true` |
 
 ## Requirements
 

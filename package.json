@@ -87,6 +87,11 @@
           "type": "boolean",
           "default": true,
           "description": "Limit indexing to only direct dependencies (recommended for better performance)"
+        },
+        "goSymbolCompletion.provideCompletionsForSpecifiedPackages": {
+          "type": "boolean",
+          "default": true,
+          "description": "When a package is specified (e.g., 'fmt.') but not imported, provide completions for it"
         }
       }
     }
