@@ -7,13 +7,17 @@
 
 A VS Code extension that provides symbol completion for Go code with or without package prefixes (similar to other popular IDEs), drastically improving the Go development experience in VS Code.
 
-<img src="contrib/screencast.gif" width="75%" alt="Go Symbol Completion in action">
+<p align="center">
+  <img src="contrib/screencast.gif" width="75%" alt="Go Symbol Completion in action">
+</p>
 
 ## Motivation
 
 This extension was born out of a common frustration among Go developers transitioning from other popular IDEs to VS Code:
 
-<img src="contrib/tweet.png" width="75%" alt="Twitter motivation">
+<p align="center">
+  <img src="contrib/tweet.png" width="60%" alt="Twitter motivation">
+</p>
 
 The built-in Go extension for VS Code requires you to type the full package name before offering completions. With this extension, you can type just the symbol name (like in other popular IDEs) and get full completions with automatic imports.
 
