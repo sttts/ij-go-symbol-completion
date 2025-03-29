@@ -15,7 +15,13 @@ module.exports = {
         },
         onDidChangeTextDocument: (callback) => {
             return { dispose: () => {} };
-        }
+        },
+        createFileSystemWatcher: () => ({
+            onDidChange: () => ({ dispose: () => {} }),
+            onDidCreate: () => ({ dispose: () => {} }),
+            onDidDelete: () => ({ dispose: () => {} }),
+            dispose: () => {}
+        })
     },
     window: {
         createOutputChannel: () => ({

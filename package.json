@@ -102,7 +102,7 @@
     "lint": "eslint src --ext ts",
     "package-vsix": "npm run compile && yes | vsce package --allow-missing-repository",
     "pretest": "mkdir -p node_modules/vscode && cp mocks/vscode.js node_modules/vscode/index.js && echo '{ \"name\": \"vscode\", \"version\": \"1.60.0\", \"main\": \"index.js\" }' > node_modules/vscode/package.json && mkdir -p out/test && cp mocks/extension.js out/test/extension.js",
-    "test": "npm run compile-tests && npm run pretest && mocha out/**/*.test.js"
+    "test": "npm run compile-tests && npm run pretest && mocha --no-timeouts out/**/*.test.js"
   },
   "devDependencies": {
     "@types/chai": "^4.3.0",

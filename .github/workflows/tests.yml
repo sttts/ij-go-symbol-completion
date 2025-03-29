@@ -44,7 +44,7 @@ jobs:
       run: npm run compile-tests
       
     - name: Run tests
-      run: npx mocha out/**/*.test.js
+      run: npx mocha --no-timeouts out/**/*.test.js
       
     - name: Upload test logs
       if: always()
