@@ -3,6 +3,8 @@
 [![Tests](https://github.com/sttts/ij-go-symbol-completion/actions/workflows/tests.yml/badge.svg)](https://github.com/sttts/ij-go-symbol-completion/actions/workflows/tests.yml)
 [![Release](https://img.shields.io/github/v/release/sttts/ij-go-symbol-completion)](https://github.com/sttts/ij-go-symbol-completion/releases/latest)
 
+> ⚠️ **EXPERIMENTAL**: This extension is an experiment in using [Cursor](https://cursor.sh) exclusively for development. **100% of the code was written without human modification** - all coding, debugging, and optimization was done through Cursor's AI interfaces, without direct human editing of the codebase. This serves as a demonstration of what's possible with modern AI-assisted development tools.
+
 A VS Code extension that provides symbol completion for Go code with or without package prefixes (similar to other popular IDEs), drastically improving the Go development experience in VS Code.
 
 ![Go Symbol Completion in action](contrib/screencast.gif)
@@ -62,10 +64,6 @@ Right-click on any import statement to reindex a package if you've updated it.
 | `goSymbolCompletion.enabled` | Enable/disable the extension | `true` |
 | `goSymbolCompletion.debugLevel` | Log verbosity (0-3) | `1` |
 | `goSymbolCompletion.limitToDirectDeps` | Only index direct dependencies | `true` |
-
-## Built with Cursor
-
-This extension is itself an experiment in using [Cursor](https://cursor.sh)'s AI-powered code generation capabilities to improve the development experience for traditional Go developers. What makes this project unique is that **100% of the code was written without human modification** - all coding, debugging, and optimization was done exclusively through Cursor's vibe coding feature and AI interfaces, without direct human editing of the codebase. This serves as a powerful demonstration of how AI assistance can enhance productivity in Go development and what's possible with modern AI-assisted development tools.
 
 ## Requirements
 
