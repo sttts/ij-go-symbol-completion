@@ -144,8 +144,55 @@ export async function activate(context: vscode.ExtensionContext) {
     })
   );
   
-  // Register command to reindex a package
-  registerReindexPackageCommand(context);
+  // Register command to show debug info for a specific package
+  context.subscriptions.push(
+    vscode.commands.registerCommand('ij-go-symbol-completion.showPackageInfo', async () => {
+      // Prompt user for package path
+      const packagePath = await vscode.window.showInputBox({
+        prompt: 'Enter the full package path to debug (e.g., github.com/user/repo/pkg)',
+        placeHolder: 'Package path'
+      });
+      
+      if (!packagePath) {
+        return;
+      }
+      
+      // Create an output channel for the package info
+      const channel = vscode.window.createOutputChannel(`Go Package Info: ${packagePath}`);
+      channel.clear();
+      channel.appendLine(symbolCache.getPackageDebugInfo(packagePath));
+      channel.show();
+    })
+  );
+  
+  // Register command to reindex a specific package (e.g., when it's updated)
+  context.subscriptions.push(
+    vscode.commands.registerCommand('ij-go-symbol-completion.reindexPackage', async () => {
+      // Prompt user for package path
+      const packagePath = await vscode.window.showInputBox({
+        prompt: 'Enter the full package path to reindex (e.g., github.com/user/repo/pkg)',
+        placeHolder: 'Package path'
+      });
+      
+      if (!packagePath) {
+        return;
+      }
+      
+      // Show progress notification
+      vscode.window.withProgress(
+        {
+          location: vscode.ProgressLocation.Notification,
+          title: `Reindexing package ${packagePath}`,
+          cancellable: false
+        },
+        async (progress) => {
+          progress.report({ message: 'Analyzing package structure...' });
+          await symbolCache.reindexPackage(packagePath);
+          progress.report({ message: 'Reindexing complete' });
+        }
+      );
+    })
+  );
   
   // Initialize the symbol cache and index built-in packages
   try {
