@@ -32,5 +32,24 @@ jobs:
     - name: Compile Extension
       run: npm run compile
       
+    - name: Create mock vscode module for tests
+      run: |
+        mkdir -p node_modules/vscode
+        cp mocks/vscode.js node_modules/vscode/index.js
+        echo '{ "name": "vscode", "version": "1.60.0", "main": "index.js" }' > node_modules/vscode/package.json
+      
+    - name: Compile Tests
+      run: npm run compile-tests
+      
     - name: Run tests
-      run: npm test 
+      run: mocha out/**/*.test.js
+      
+    - name: Upload test logs
+      if: always()
+      uses: actions/upload-artifact@v3
+      with:
+        name: test-logs
+        path: |
+          out/**/*.test.js
+          out/*.test.js
+        retention-days: 5 
