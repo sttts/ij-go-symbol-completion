@@ -4,7 +4,16 @@ module.exports = {
         getConfiguration: () => ({
             get: () => true
         }),
-        workspaceFolders: [],
+        workspaceFolders: [
+            {
+                uri: {
+                    fsPath: process.cwd(),
+                    path: process.cwd()
+                },
+                name: 'ij-go-symbol-completion',
+                index: 0
+            }
+        ],
         // Add event handlers
         onDidChangeConfiguration: (callback) => {
             // Return a disposable object
@@ -36,6 +45,18 @@ module.exports = {
     commands: {
         registerCommand: () => ({ dispose: () => {} }),
         executeCommand: () => Promise.resolve()
+    },
+    extensions: {
+        getExtension: (id) => {
+            if (id === 'sttts.ij-go-symbol-completion') {
+                return {
+                    packageJSON: {
+                        version: '0.1.0'
+                    }
+                };
+            }
+            return null;
+        }
     },
     // Add other commonly used APIs
     EventEmitter: class {

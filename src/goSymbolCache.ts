@@ -97,6 +97,7 @@ export class GoSymbolCache {
   private hostname: string;
   private cacheFileWatcher: vscode.FileSystemWatcher | null = null;
   private packageInfo: Map<string, { version: string; timestamp: number; dirHash?: string }> = new Map();
+  private processedPackages: string[] = [];
   
   constructor() {
     // Create a temporary file for passing package lists to Go
@@ -2230,10 +2231,10 @@ export class GoSymbolCache {
   /**
    * Save the symbol cache to disk
    */
-  private async saveCacheToDisk(): Promise<void> {
+  private async saveCacheToDisk(): Promise<boolean> {
     if (!this.isLeader) {
       logger.log("Not saving cache because this instance is not the leader", 2);
-      return;
+      return false;
     }
     
     logger.log("Saving symbol cache to disk...", 2);
@@ -2249,29 +2250,72 @@ export class GoSymbolCache {
         packages: Object.fromEntries(this.indexedPackages),
         packageInfo: Object.fromEntries(this.packageInfo),
         symbols: {},
-        processedPackages: Array.from(this.indexedPackages.keys())
+        processedPackages: this.processedPackages || []
       };
       
-      // Convert Map to serializable object
-      for (const [name, symbols] of this.symbols) {
-        cacheData.symbols[name] = symbols;
+      // Get all symbols
+      const uniqueSymbols = this.symbols.size;
+      const totalSymbols = this.getTotalSymbolCount();
+      const packageCount = this.indexedPackages.size;
+      
+      logger.log(`Preparing to save ${uniqueSymbols} unique symbols (${totalSymbols} total) from ${packageCount} packages`, 2);
+      
+      // Convert symbols Map to serializable object
+      for (const [name, symbolList] of this.symbols.entries()) {
+        cacheData.symbols[name] = symbolList;
       }
       
-      // Convert to JSON
-      const cacheContent = JSON.stringify(cacheData);
+      // Ensure the cache directory exists
+      const cacheDir = path.dirname(this.cachePath);
+      if (!fs.existsSync(cacheDir)) {
+        fs.mkdirSync(cacheDir, { recursive: true });
+      }
       
-      // Write to a temp file first
-      const tempCachePath = `${this.cachePath}.tmp`;
-      await fs.promises.writeFile(tempCachePath, cacheContent, 'utf-8');
+      // Serialize to JSON
+      const serializedData = JSON.stringify(cacheData, null, 2);
       
-      // Then atomically rename to the final path
-      await fs.promises.rename(tempCachePath, this.cachePath);
+      if (!serializedData || serializedData.length < 10) {
+        logger.log(`WARNING: Serialized cache data appears too small or invalid: ${serializedData.substring(0, 100)}...`);
+        return false;
+      }
       
-      const stats = await fs.promises.stat(this.cachePath);
-      const fileSizeKB = Math.round(stats.size / 1024);
-      logger.log(`Cache saved successfully (${fileSizeKB} KB, ${Object.keys(cacheData.symbols).length} unique symbols)`, 1);
+      logger.log(`Serialized cache data: ${serializedData.length} bytes`, 2);
+      
+      // Write to a temporary file first to avoid corruption
+      const tempCachePath = this.cachePath + '.tmp';
+      fs.writeFileSync(tempCachePath, serializedData);
+      
+      // Verify the temporary file was written
+      if (!fs.existsSync(tempCachePath)) {
+        logger.log(`Failed to write temporary cache file at ${tempCachePath}`);
+        return false;
+      }
+      
+      // Get the file size of the temporary file
+      const tempFileSize = fs.statSync(tempCachePath).size;
+      logger.log(`Temporary cache file size: ${tempFileSize} bytes`);
+      
+      // Check if the file size is reasonable
+      if (tempFileSize < 100) {
+        logger.log(`WARNING: Temporary cache file appears too small (${tempFileSize} bytes). Not proceeding with cache update.`);
+        fs.unlinkSync(tempCachePath);
+        return false;
+      }
+      
+      // Rename the temporary file to the target file (atomic operation)
+      fs.renameSync(tempCachePath, this.cachePath);
+      
+      // Verify the file was written
+      if (!fs.existsSync(this.cachePath)) {
+        logger.log(`Failed to rename temporary cache file to ${this.cachePath}`);
+        return false;
+      }
+      
+      logger.log(`Cache saved to ${this.cachePath} with ${uniqueSymbols} unique symbols (${totalSymbols} total) and ${packageCount} processed packages`);
+      return true;
     } catch (error) {
-      logger.log(`Error saving cache: ${error instanceof Error ? error.message : String(error)}`, 1);
+      logger.log(`Error saving cache to disk: ${error instanceof Error ? error.message : String(error)}`);
+      return false;
     }
   }
 
