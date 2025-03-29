@@ -12,9 +12,7 @@ A VS Code extension that provides IntelliJ-like symbol completion for Go code wi
 
 This extension was born out of a common frustration among Go developers transitioning from JetBrains products to VS Code:
 
-![Twitter motivation](https://pbs.twimg.com/media/GOiwDnfWwAArXKB?format=jpg&name=medium)
-
-*Note: Please replace this with an actual screenshot of the tweet at https://x.com/the_sttts/status/1905285885244883163*
+![Twitter motivation](contrib/tweet.png)
 
 The built-in Go extension for VS Code requires you to type the full package name before offering completions. With this extension, you can type just the symbol name (like in IntelliJ/GoLand) and get full completions with automatic imports.
 
@@ -64,11 +62,7 @@ Right-click on any import statement to reindex a package if you've updated it.
 
 ## Built with Cursor
 
-This extension is itself an experiment in using [Cursor](https://cursor.sh) for Golang development. The entire extension was developed exclusively in Cursor to demonstrate how AI-powered tools can enhance the development workflow.
-
-## AI-Generated Code
-
-What makes this project unique is that **100% of the code was written without human modification**. All coding, debugging, and optimization was done through AI interfaces in Cursor, without direct human editing of the codebase. This serves as a demonstration of what's possible with modern AI-assisted development tools.
+This extension is itself an experiment in using [Cursor](https://cursor.sh)'s AI-powered code generation capabilities to improve the development experience for traditional Go developers. What makes this project unique is that **100% of the code was written without human modification** - all coding, debugging, and optimization was done exclusively through Cursor's vibe coding feature and AI interfaces, without direct human editing of the codebase. This serves as a powerful demonstration of how AI assistance can enhance productivity in Go development and what's possible with modern AI-assisted development tools.
 
 ## Requirements
 
