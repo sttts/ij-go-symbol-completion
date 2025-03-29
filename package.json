@@ -2,7 +2,7 @@
   "name": "ij-go-symbol-completion",
   "displayName": "Go Symbol Completion",
   "description": "Go symbol completion with or without package prefix, similar to other popular IDEs",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "publisher": "sttts",
   "repository": {
     "type": "git",
