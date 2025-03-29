@@ -1,9 +1,17 @@
 name: Release
 
 on:
-  push:
-    tags:
-      - 'v*'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version to release (e.g., v0.1.6)'
+        required: true
+        type: string
+      publish_to_marketplace:
+        description: 'Publish to VS Code Marketplace'
+        required: true
+        type: boolean
+        default: false
 
 permissions:
   contents: write
@@ -37,19 +45,21 @@ jobs:
     - name: Build VSIX package
       run: |
         npm run compile
-        vsce package --allow-missing-repository
+        vsce package --no-dependencies
         
     - name: Create GitHub Release
       id: create_release
       uses: softprops/action-gh-release@v1
       with:
         files: ./go-symbol-completion-*.vsix
-        name: Release ${{ github.ref_name }}
+        name: Release ${{ github.event.inputs.version }}
+        tag_name: ${{ github.event.inputs.version }}
         draft: false
         prerelease: false
         generate_release_notes: true
-        
+         
     - name: Publish to VS Code Marketplace
-      run: vsce publish -p ${{ secrets.VSCE_PAT }} --no-dependencies
+      if: ${{ github.event.inputs.publish_to_marketplace == 'true' }}
+      run: vsce publish -p ${{ secrets.VSCE_TOKEN }} --no-dependencies
       env:
-        VSCE_PAT: ${{ secrets.VSCE_PAT }} 
+        VSCE_TOKEN: ${{ secrets.VSCE_TOKEN }} 
