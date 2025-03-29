@@ -4,6 +4,10 @@
   "description": "Go symbol completion with or without package prefix, similar to other popular IDEs",
   "version": "0.0.58",
   "publisher": "sttts",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/sttts/ij-go-symbol-completion"
+  },
   "engines": {
     "vscode": "^1.60.0"
   },

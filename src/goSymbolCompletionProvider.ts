@@ -93,7 +93,7 @@ export class GoSymbolCompletionProvider implements vscode.CompletionItemProvider
         // For non-functions, just insert the qualified name
         item.insertText = qualifiedName;
       }
-      
+
       // Add documentation
       item.documentation = new vscode.MarkdownString();
       item.documentation.appendCodeblock(`${symbol.packagePath}.${symbol.name}${symbol.signature || ''}`, 'go');
