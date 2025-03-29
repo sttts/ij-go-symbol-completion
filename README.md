@@ -1,5 +1,8 @@
 # Go Symbol Completion for VS Code
 
+[![Tests](https://github.com/sttts/ij-go-symbol-completion/actions/workflows/tests.yml/badge.svg)](https://github.com/sttts/ij-go-symbol-completion/actions/workflows/tests.yml)
+[![Release](https://img.shields.io/github/v/release/sttts/ij-go-symbol-completion)](https://github.com/sttts/ij-go-symbol-completion/releases/latest)
+
 A VS Code extension that provides symbol completion for Go code with or without package prefixes (similar to other popular IDEs), drastically improving the Go development experience in VS Code.
 
 ![Go Symbol Completion in action](contrib/screencast.gif)
