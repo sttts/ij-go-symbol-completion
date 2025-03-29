@@ -4,6 +4,7 @@
   "description": "Go symbol completion with or without package prefix, similar to other popular IDEs",
   "version": "0.1.5",
   "publisher": "sttts",
+  "icon": "contrib/icon.png",
   "repository": {
     "type": "git",
     "url": "https://github.com/sttts/vscode-go-symbol-completion"
@@ -105,7 +106,7 @@
     "compile-tests": "tsc -p . --outDir out",
     "watch-tests": "tsc -p . -w --outDir out",
     "lint": "eslint src --ext ts",
-    "package-vsix": "npm run compile && yes | vsce package --allow-missing-repository",
+    "package-vsix": "npm run compile && yes | vsce package --no-dependencies",
     "pretest": "mkdir -p node_modules/vscode && cp mocks/vscode.js node_modules/vscode/index.js && echo '{ \"name\": \"vscode\", \"version\": \"1.60.0\", \"main\": \"index.js\" }' > node_modules/vscode/package.json && mkdir -p out/test && cp mocks/extension.js out/test/extension.js",
     "test": "npm run compile-tests && npm run pretest && mocha --no-timeouts out/**/*.test.js"
   },
