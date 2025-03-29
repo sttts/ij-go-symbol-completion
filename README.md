@@ -1,6 +1,6 @@
 # Go Symbol Completion for VS Code
 
-A VS Code extension that provides IntelliJ-like symbol completion for Go code with or without package prefixes, drastically improving the Go development experience in VS Code.
+A VS Code extension that provides symbol completion for Go code with or without package prefixes (similar to other popular IDEs), drastically improving the Go development experience in VS Code.
 
 ![Go Symbol Completion in action](contrib/screencast.gif)
 
@@ -10,15 +10,15 @@ A VS Code extension that provides IntelliJ-like symbol completion for Go code wi
 
 ## Motivation
 
-This extension was born out of a common frustration among Go developers transitioning from JetBrains products to VS Code:
+This extension was born out of a common frustration among Go developers transitioning from other popular IDEs to VS Code:
 
 ![Twitter motivation](contrib/tweet.png)
 
-The built-in Go extension for VS Code requires you to type the full package name before offering completions. With this extension, you can type just the symbol name (like in IntelliJ/GoLand) and get full completions with automatic imports.
+The built-in Go extension for VS Code requires you to type the full package name before offering completions. With this extension, you can type just the symbol name (like in other popular IDEs) and get full completions with automatic imports.
 
 ## Features
 
-- **IntelliJ-style completions**: Type any symbol name without package prefix to get completions
+- **Smart IDE-style completions**: Type any symbol name without package prefix to get completions
 - **Package prefixed completions**: Also supports traditional `package.Symbol` style completions
 - **Automatic imports**: Automatically adds imports when you select a completion
 - **Background indexing**: Indexes workspace and dependency packages for fast completions

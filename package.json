@@ -1,7 +1,7 @@
 {
   "name": "ij-go-symbol-completion",
   "displayName": "Go Symbol Completion",
-  "description": "IntelliJ-like Go symbol completion with or without package prefix",
+  "description": "Go symbol completion with or without package prefix, similar to other popular IDEs",
   "version": "0.0.57",
   "publisher": "sttts",
   "engines": {
