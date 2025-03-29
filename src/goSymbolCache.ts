@@ -1187,8 +1187,8 @@ export class GoSymbolCache {
       // Debug the Go helper script content to verify it's the correct file
       try {
         const helperContent = await fs.promises.readFile(helperPath, 'utf-8');
-        logger.log(`Helper script size: ${helperContent.length} bytes`);
-        logger.log(`Helper script first 100 chars: ${helperContent.substring(0, 100)}`);
+        logger.log(`Helper script size: ${helperContent.length} bytes`, 2);
+        logger.log(`Helper script first 100 chars: ${helperContent.substring(0, 100)}`, 2);
       } catch (readError) {
         logger.log(`Failed to read helper script: ${readError instanceof Error ? readError.message : String(readError)}`);
       }
@@ -1199,7 +1199,7 @@ export class GoSymbolCache {
       
       // Run the helper program with the package list - add a debug output
       const command = `go run ${helperPath} -packages=${this.tempFilePath} -verbose -v=${debugLevel}`;
-      logger.log(`Running command: ${command}`);
+      logger.log(`Running command: ${command}`, 2);
       
       const result = await this.execCommand(command);
       
@@ -1509,113 +1509,40 @@ export class GoSymbolCache {
   }
   
   /**
-   * Process the extracted symbols from the Go helper and add them to the cache
+   * Process extracted symbols from the helper tool
    */
   private processExtractedSymbols(data: any): number {
-    if (!data || !data.Packages || !Array.isArray(data.Packages)) {
-      logger.log('Invalid data format from symbol extractor');
-      // Add more detailed diagnostic information
-      if (data) {
-        logger.log(`Received data type: ${typeof data}`);
-        if (typeof data === 'object') {
-          logger.log(`Data keys: ${Object.keys(data).join(', ')}`);
-        }
-      }
-      return 0;
-    }
+    let symbolCount = 0;
     
-    let totalSymbols = 0;
-    logger.log(`Processing ${data.Packages.length} packages from extractor`);
-    
-    // Keep track of packages with symbols for debugging
-    const packagesWithSymbols: string[] = [];
-    const packagesWithoutSymbols: string[] = [];
-    
-    for (const pkgData of data.Packages) {
-      const packagePath = pkgData.ImportPath;
-      const packageName = pkgData.Name;
+    for (const packagePath in data) {
+      const packageInfo = data[packagePath];
+      const symbols = packageInfo.symbols || [];
       
-      if (!packagePath || !packageName) {
-        logger.log(`Skipping package with invalid path or name: ${JSON.stringify(pkgData)}`);
-        continue;
+      logger.log(`Processing ${symbols.length} symbols from package ${packagePath}`, 2);
+      
+      for (const symbol of symbols) {
+        if (!symbol.name) continue;
+        
+        this.addSymbol({
+          name: symbol.name,
+          packagePath: packagePath,
+          packageName: packageInfo.packageName || packagePath.split('/').pop() || packagePath,
+          kind: symbol.kind || 'unknown',
+          signature: symbol.signature || '',
+          isExported: symbol.exported === true
+        });
+        symbolCount++;
       }
       
-      let packageSymbolCount = 0;
-      
-      // Process functions
-      if (pkgData.Functions && Array.isArray(pkgData.Functions)) {
-        for (const func of pkgData.Functions) {
-          if (func.Name) {
-            this.addSymbol({
-              name: func.Name,
-              packagePath,
-              packageName,
-              kind: 'function',
-              signature: func.Signature || '',
-              isExported: func.IsExported
-            });
-            totalSymbols++;
-            packageSymbolCount++;
-          }
-        }
-      }
-      
-      // Process types
-      if (pkgData.Types && Array.isArray(pkgData.Types)) {
-        for (const type of pkgData.Types) {
-          if (type.Name) {
-            this.addSymbol({
-              name: type.Name,
-              packagePath,
-              packageName,
-              kind: type.Kind || 'type',
-              isExported: type.IsExported
-            });
-            totalSymbols++;
-            packageSymbolCount++;
-          }
-        }
-      }
-      
-      // Process variables and constants
-      if (pkgData.Variables && Array.isArray(pkgData.Variables)) {
-        for (const variable of pkgData.Variables) {
-          if (variable.Name) {
-            this.addSymbol({
-              name: variable.Name,
-              packagePath,
-              packageName,
-              kind: variable.IsConstant ? 'const' : 'var',
-              isExported: variable.IsExported
-            });
-            totalSymbols++;
-            packageSymbolCount++;
-          }
-        }
-      }
-      
-      // Track packages with/without symbols for debugging
-      if (packageSymbolCount > 0) {
-        packagesWithSymbols.push(packagePath);
-      } else {
-        packagesWithoutSymbols.push(packagePath);
+      // Mark the package as processed
+      if (!this.indexedPackages.has(packagePath)) {
+        // Use a default version value if not already set
+        this.indexedPackages.set(packagePath, 'unknown');
       }
     }
     
-    logger.log(`Processed ${totalSymbols} symbols from ${data.Packages.length} packages`);
-    logger.log(`Packages with symbols: ${packagesWithSymbols.length}, without symbols: ${packagesWithoutSymbols.length}`);
-    
-    // Log some example packages with symbols for debugging
-    if (packagesWithSymbols.length > 0) {
-      logger.log(`Examples of packages with symbols: ${packagesWithSymbols.slice(0, 5).join(', ')}`);
-    }
-    
-    // Log some examples of packages without symbols for debugging
-    if (packagesWithoutSymbols.length > 0 && packagesWithoutSymbols.length < data.Packages.length) {
-      logger.log(`Examples of packages without symbols: ${packagesWithoutSymbols.slice(0, 5).join(', ')}`);
-    }
-    
-    return totalSymbols;
+    logger.log(`Processed ${symbolCount} total symbols from ${Object.keys(data).length} packages`, 1);
+    return symbolCount;
   }
   
   /**
@@ -1911,19 +1838,19 @@ export class GoSymbolCache {
    * Add a symbol to the cache
    */
   private addSymbol(symbol: GoSymbol): void {
-    // Debug full symbol object
-    logger.log(`Adding symbol (debug): ${JSON.stringify(symbol)}`);
+    // Debug full symbol object - very verbose at level 3
+    logger.log(`Adding symbol (debug): ${JSON.stringify(symbol)}`, 3);
     
     if (!symbol.name || !symbol.isExported) {
-      logger.log(`Skipping symbol due to: name=${!!symbol.name}, isExported=${!!symbol.isExported}`);
+      logger.log(`Skipping symbol due to: name=${!!symbol.name}, isExported=${!!symbol.isExported}`, 2);
       return;
     }
     
     // Remove any potential transformations that might be affecting the name
     const name = symbol.name.trim();
     
-    // Log the addition of the symbol for debugging
-    logger.log(`Adding symbol: ${name} from ${symbol.packagePath} (kind: ${symbol.kind}, isExported: ${symbol.isExported})`);
+    // Log the addition of the symbol for debugging - level 2
+    logger.log(`Adding symbol: ${name} from ${symbol.packagePath} (kind: ${symbol.kind}, isExported: ${symbol.isExported})`, 2);
     
     if (!this.symbols.has(name)) {
       this.symbols.set(name, []);
@@ -1934,8 +1861,21 @@ export class GoSymbolCache {
       name
     });
     
-    // Debug total symbols count after adding
-    logger.log(`Symbol count after adding: ${this.symbols.size} unique symbols`);
+    const totalCount = this.getTotalSymbolCount();
+    
+    // Debug total symbols count after adding - level 2
+    logger.log(`Symbol count after adding: ${this.symbols.size} unique names with ${totalCount} total symbols`, 2);
+  }
+  
+  /**
+   * Get the total count of all symbols 
+   */
+  private getTotalSymbolCount(): number {
+    let totalSymbolCount = 0;
+    for (const symbolList of this.symbols.values()) {
+      totalSymbolCount += symbolList.length;
+    }
+    return totalSymbolCount;
   }
   
   /**

@@ -5,14 +5,32 @@ import { GoSymbolCache } from './goSymbolCache';
 
 export class Logger {
   private outputChannel: vscode.OutputChannel;
+  private debugLevel: number = 1; // Default to level 1
 
   constructor() {
     this.outputChannel = vscode.window.createOutputChannel('Go Symbol Completion');
+    this.updateDebugLevel();
+    
+    // Listen for configuration changes
+    vscode.workspace.onDidChangeConfiguration(e => {
+      if (e.affectsConfiguration('goSymbolCompletion.debugLevel')) {
+        this.updateDebugLevel();
+      }
+    });
   }
 
-  public log(message: string): void {
-    const timestamp = new Date().toISOString();
-    this.outputChannel.appendLine(`[${timestamp}] ${message}`);
+  private updateDebugLevel(): void {
+    const config = vscode.workspace.getConfiguration('goSymbolCompletion');
+    this.debugLevel = config.get<number>('debugLevel', 1);
+    this.log(`Debug level set to ${this.debugLevel}`, 1);
+  }
+
+  public log(message: string, level: number = 1): void {
+    // Only log if the message's level is less than or equal to the current debug level
+    if (level <= this.debugLevel) {
+      const timestamp = new Date().toISOString();
+      this.outputChannel.appendLine(`[${timestamp}] ${message}`);
+    }
   }
 
   public show(): void {
