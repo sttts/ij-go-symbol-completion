@@ -2,7 +2,7 @@
 
 A VS Code extension that provides IntelliJ-like symbol completion for Go code with or without package prefixes, drastically improving the Go development experience in VS Code.
 
-![Go Symbol Completion in action](https://i.imgur.com/YOUR_SCREENSHOT_URL.png)
+![Go Symbol Completion in action](contrib/screencast.gif)
 
 > 🚀 **For Go developers tired of subpar symbol completion**
 >
