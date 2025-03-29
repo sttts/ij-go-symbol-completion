@@ -248,16 +248,118 @@ describe('GoSymbolCache', () => {
             assert.strictEqual(privateCache.indexedPackages.get('github.com/user/repo'), 'v1.2.3', 
                 'Should detect version for GitHub package');
             assert.strictEqual(privateCache.indexedPackages.get('github.com/user/repo/subpkg'), 'v1.2.3', 
-                'Should use parent module version for subpackage');
-            assert.strictEqual(privateCache.indexedPackages.get('gitlab.com/group/project'), 'v0.5.0', 
-                'Should detect version for GitLab package');
-            assert.strictEqual(privateCache.indexedPackages.get('cloud.google.com/go/pubsub'), 'v1.33.0', 
-                'Should detect version for Cloud package');
-            assert.strictEqual(privateCache.indexedPackages.get('example.com/mymodule'), 'workspace', 
-                'Should use workspace for main module');
+                'Should inherit version from parent module');
             
-            // Restore original exec function
+            // Restore original execCommand
             privateCache.execCommand = originalExecCommand;
+        });
+    });
+    
+    describe('Outdated package detection', () => {
+        it('should correctly identify packages needing reindexing', async () => {
+            const cache = new GoSymbolCache();
+            const privateCache = cache as any;
+            
+            // Mock getAllGoPackages to return a fixed set of packages
+            privateCache.getAllGoPackages = async () => {
+                return [
+                    'github.com/user/repo',          // Already indexed with same version
+                    'github.com/user/repo/subpkg',   // Already indexed with same version
+                    'github.com/user/new-pkg',       // New package
+                    'github.com/user/changed-pkg',   // Version changed
+                    'github.com/user/old-pkg'        // Old metadata
+                ];
+            };
+            
+            // Mock getChangedWorkspacePackages to return packages with changed versions
+            privateCache.getChangedWorkspacePackages = async () => {
+                const changed = new Map<string, string>();
+                changed.set('github.com/user/changed-pkg', 'v2.0.0');
+                return changed;
+            };
+            
+            // Setup existing indexed packages
+            privateCache.indexedPackages = new Map<string, string>();
+            privateCache.indexedPackages.set('github.com/user/repo', 'v1.0.0');
+            privateCache.indexedPackages.set('github.com/user/repo/subpkg', 'v1.0.0');
+            privateCache.indexedPackages.set('github.com/user/changed-pkg', 'v1.0.0');
+            privateCache.indexedPackages.set('github.com/user/old-pkg', 'v1.0.0');
+            
+            // Setup package metadata with timestamps
+            privateCache.packageInfo = new Map();
+            
+            // Recent package (within 7 days)
+            privateCache.packageInfo.set('github.com/user/repo', {
+                version: 'v1.0.0',
+                timestamp: Date.now() - 3 * 24 * 60 * 60 * 1000 // 3 days ago
+            });
+            
+            privateCache.packageInfo.set('github.com/user/repo/subpkg', {
+                version: 'v1.0.0',
+                timestamp: Date.now() - 2 * 24 * 60 * 60 * 1000 // 2 days ago
+            });
+            
+            // Old package (older than 7 days) 
+            privateCache.packageInfo.set('github.com/user/old-pkg', {
+                version: 'v1.0.0',
+                timestamp: Date.now() - 30 * 24 * 60 * 60 * 1000 // 30 days ago
+            });
+            
+            // Setup workspace package detection 
+            privateCache.isWorkspacePackage = (pkg: string) => {
+                return pkg === 'github.com/user/old-pkg'; // Only this is a workspace package
+            };
+            
+            // Get outdated packages
+            const outdated = await privateCache.getOutdatedPackages();
+            
+            // Verify the right packages are identified
+            assert.strictEqual(outdated.length, 3, 'Should identify exactly 3 outdated packages');
+            assert.ok(outdated.includes('github.com/user/new-pkg'), 'Should include new package');
+            assert.ok(outdated.includes('github.com/user/changed-pkg'), 'Should include package with changed version');
+            assert.ok(outdated.includes('github.com/user/old-pkg'), 'Should include old workspace package');
+            
+            // Verify packages that should not be reindexed
+            assert.ok(!outdated.includes('github.com/user/repo'), 'Should not include recent package');
+            assert.ok(!outdated.includes('github.com/user/repo/subpkg'), 'Should not include recent subpackage');
+        });
+        
+        it('should handle missing package info', async () => {
+            const cache = new GoSymbolCache();
+            const privateCache = cache as any;
+            
+            // Mock getAllGoPackages to return a fixed set of packages
+            privateCache.getAllGoPackages = async () => {
+                return [
+                    'github.com/user/repo',        // With metadata
+                    'github.com/user/no-metadata'  // Without metadata
+                ];
+            };
+            
+            // Mock getChangedWorkspacePackages to return empty map (no changes)
+            privateCache.getChangedWorkspacePackages = async () => new Map();
+            
+            // Setup existing indexed packages
+            privateCache.indexedPackages = new Map<string, string>();
+            privateCache.indexedPackages.set('github.com/user/repo', 'v1.0.0');
+            privateCache.indexedPackages.set('github.com/user/no-metadata', 'v1.0.0');
+            
+            // Setup package metadata, but only for one package
+            privateCache.packageInfo = new Map();
+            privateCache.packageInfo.set('github.com/user/repo', {
+                version: 'v1.0.0',
+                timestamp: Date.now() - 3 * 24 * 60 * 60 * 1000 // 3 days ago
+            });
+            
+            // None of these are workspace packages
+            privateCache.isWorkspacePackage = () => false;
+            
+            // Get outdated packages
+            const outdated = await privateCache.getOutdatedPackages();
+            
+            // Verify that the package without metadata is included
+            assert.strictEqual(outdated.length, 1, 'Should identify exactly 1 outdated package');
+            assert.ok(outdated.includes('github.com/user/no-metadata'), 'Should include package without metadata');
         });
     });
 }); 

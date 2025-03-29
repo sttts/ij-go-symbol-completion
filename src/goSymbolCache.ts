@@ -2060,68 +2060,141 @@ export class GoSymbolCache {
    * @returns Debug information as a string
    */
   public getDebugInfo(includeSymbols: boolean = false): string {
-    const output: string[] = [];
+    // Get info about the cache and configuration
+    const now = Date.now();
+    const symbolCount = this.getTotalSymbolCount();
+    const packageCount = this.indexedPackages.size;
     
-    output.push('# Go Symbol Cache Debug Information');
-    output.push('');
-    output.push(`- Initialized: ${this.initialized}`);
-    output.push(`- Symbols Count: ${this.symbols.size}`);
-    output.push(`- Indexed Packages: ${this.indexedPackages.size}`);
-    output.push(`- Is Leader: ${this.isLeader}`);
-    output.push(`- Go Version: ${this.goVersion}`);
-    output.push(`- Cache Path: ${this.cachePath}`);
-    output.push('');
+    // Build summary
+    let info = `Go Symbol Cache Info:\n`;
+    info += `- Go Version: ${this.goVersion}\n`;
+    info += `- Extension Version: ${this.getExtensionVersion()}\n`;
+    info += `- Cache Path: ${this.cachePath}\n`;
+    info += `- Leader Lock Path: ${this.leaderLockPath}\n`;
+    info += `- Is Leader: ${this.isLeader ? 'Yes' : 'No'}\n`;
+    info += `- Indexed Packages: ${packageCount}\n`;
+    info += `- Total Symbols: ${symbolCount}\n`;
     
-    // Add information about indexed packages
-    output.push('## Indexed Packages');
-    output.push('');
+    // Get configuration
+    const config = vscode.workspace.getConfiguration('goSymbolCompletion');
+    const limitToDirectDeps = config.get<boolean>('limitToDirectDeps', true);
+    info += `- Config: limitToDirectDeps = ${limitToDirectDeps}\n`;
     
-    // Sort packages for easier viewing
-    const sortedPackages = Array.from(this.indexedPackages.entries())
-      .sort((a, b) => a[0].localeCompare(b[0]));
-    
-    for (const [pkg, version] of sortedPackages) {
-      output.push(`- ${pkg}: ${version}`);
+    // Sample of indexed packages with their versions
+    const samplePackages = Array.from(this.indexedPackages.keys()).slice(0, 10);
+    info += `\nSample of indexed packages (${Math.min(10, packageCount)} of ${packageCount}):\n`;
+    for (const pkg of samplePackages) {
+      const version = this.indexedPackages.get(pkg) || '(unknown)';
+      info += `- ${pkg}: ${version}\n`;
     }
     
-    if (includeSymbols) {
-      output.push('');
-      output.push('## Symbols');
-      output.push('');
-      
-      // Get total symbol count
-      let totalSymbolCount = 0;
-      for (const symbolList of this.symbols.values()) {
-        totalSymbolCount += symbolList.length;
-      }
-      output.push(`Total symbols: ${totalSymbolCount}`);
-      output.push('');
-      
-      // Sort symbol names for easier viewing
-      const sortedSymbolNames = Array.from(this.symbols.keys()).sort();
-      
-      for (const name of sortedSymbolNames) {
-        const symbols = this.symbols.get(name);
-        if (!symbols) continue;
-        
-        output.push(`### ${name} (${symbols.length})`);
-        output.push('');
-        
-        for (const symbol of symbols) {
-          output.push(`- ${symbol.kind} from ${symbol.packagePath}: ${symbol.name}`);
-          if (symbol.signature) {
-            output.push(`  Signature: ${symbol.signature}`);
-          }
+    // Package age summary
+    let under24hours = 0;
+    let under7days = 0;
+    let over7days = 0;
+    let noTimestamp = 0;
+    
+    for (const pkg of this.indexedPackages.keys()) {
+      const pkgInfo = this.packageInfo.get(pkg);
+      if (!pkgInfo || !pkgInfo.timestamp) {
+        noTimestamp++;
+      } else {
+        const ageInDays = (now - pkgInfo.timestamp) / (24 * 60 * 60 * 1000);
+        if (ageInDays < 1) {
+          under24hours++;
+        } else if (ageInDays < 7) {
+          under7days++;
+        } else {
+          over7days++;
         }
-        output.push('');
       }
     }
     
-    return output.join('\n');
+    info += `\nPackage age summary:\n`;
+    info += `- Under 24 hours: ${under24hours} (${Math.round(under24hours/packageCount*100)}%)\n`;
+    info += `- 1-7 days old: ${under7days} (${Math.round(under7days/packageCount*100)}%)\n`;
+    info += `- Over 7 days old: ${over7days} (${Math.round(over7days/packageCount*100)}%)\n`;
+    info += `- No timestamp: ${noTimestamp} (${Math.round(noTimestamp/packageCount*100)}%)\n`;
+    
+    // Include symbol details if requested
+    if (includeSymbols) {
+      info += `\nSymbol distribution by first letter:\n`;
+      const letterCounts = new Map<string, number>();
+      
+      for (const [name, symbols] of this.symbols.entries()) {
+        const firstLetter = name.charAt(0).toUpperCase();
+        const count = letterCounts.get(firstLetter) || 0;
+        letterCounts.set(firstLetter, count + symbols.length);
+      }
+      
+      for (const letter of 'ABCDEFGHIJKLMNOPQRSTUVWXYZ') {
+        const count = letterCounts.get(letter) || 0;
+        if (count > 0) {
+          info += `- ${letter}: ${count}\n`;
+        }
+      }
+      
+      // Show non-letter starting symbols as "Other"
+      let otherCount = 0;
+      for (const [letter, count] of letterCounts.entries()) {
+        if (!/^[A-Z]$/.test(letter)) {
+          otherCount += count;
+        }
+      }
+      if (otherCount > 0) {
+        info += `- Other: ${otherCount}\n`;
+      }
+    }
+    
+    return info;
   }
 
   /**
-   * Get all symbols from the cache - for debugging
+   * Provides detailed information about a specific package's indexing status
+   */
+  public getPackageDebugInfo(packagePath: string): string {
+    let info = `Package Info for: ${packagePath}\n`;
+    
+    // Check if package is indexed
+    if (!this.indexedPackages.has(packagePath)) {
+      info += `- Status: Not indexed\n`;
+      return info;
+    }
+    
+    // Get package version
+    const version = this.indexedPackages.get(packagePath);
+    info += `- Version: ${version}\n`;
+    
+    // Get package metadata if available
+    const pkgInfo = this.packageInfo.get(packagePath);
+    if (pkgInfo) {
+      info += `- Last indexed: ${new Date(pkgInfo.timestamp).toISOString()}\n`;
+      info += `- Age: ${Math.round((Date.now() - pkgInfo.timestamp) / (24 * 60 * 60 * 1000))} days\n`;
+      if (pkgInfo.dirHash) {
+        info += `- Directory hash: ${pkgInfo.dirHash}\n`;
+      }
+    } else {
+      info += `- No metadata available\n`;
+    }
+    
+    // Check if it's a workspace package
+    info += `- Workspace package: ${this.isWorkspacePackage(packagePath) ? 'Yes' : 'No'}\n`;
+    
+    // Check if it's a standard library package
+    info += `- Standard library: ${this.isStandardLibraryPackage(packagePath) ? 'Yes' : 'No'}\n`;
+    
+    // Count symbols belonging to this package
+    let symbolCount = 0;
+    for (const symbols of this.symbols.values()) {
+      symbolCount += symbols.filter(s => s.packagePath === packagePath).length;
+    }
+    info += `- Symbols in cache: ${symbolCount}\n`;
+    
+    return info;
+  }
+
+  /**
+   * Get all symbols for debugging
    */
   public getAllSymbols(): Map<string, GoSymbol[]> {
     return this.symbols;
