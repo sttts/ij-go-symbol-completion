@@ -37,6 +37,8 @@ jobs:
         mkdir -p node_modules/vscode
         cp mocks/vscode.js node_modules/vscode/index.js
         echo '{ "name": "vscode", "version": "1.60.0", "main": "index.js" }' > node_modules/vscode/package.json
+        mkdir -p out/test
+        cp mocks/extension.js out/test/extension.js
       
     - name: Compile Tests
       run: npm run compile-tests
