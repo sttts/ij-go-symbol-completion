@@ -25,6 +25,13 @@ interface CacheData {
   packages: {             // Map of indexed packages and their versions
     [packagePath: string]: string; // packagePath -> version
   };
+  packageInfo: {          // Additional package information for more stable version checks
+    [packagePath: string]: {
+      version: string;    // Version from go.mod or similar
+      timestamp: number;  // When this package was last indexed
+      dirHash?: string;   // Hash of directory contents if available
+    }
+  };
   symbols: {              // Serialized symbols map
     [symbolName: string]: GoSymbol[];
   };
@@ -71,6 +78,9 @@ const LEADER_HEARTBEAT_INTERVAL = 10000; // 10 seconds
 // How long before a leader is considered dead (milliseconds)
 const LEADER_TIMEOUT = 30000; // 30 seconds
 
+// Add this at the beginning of the file, with other constants
+const DEFAULT_DIRECT_DEPS_ONLY = true; // Default to only indexing direct dependencies
+
 export class GoSymbolCache {
   private symbols: Map<string, GoSymbol[]> = new Map();
   private initialized: boolean = false;
@@ -86,6 +96,7 @@ export class GoSymbolCache {
   private heartbeatInterval: NodeJS.Timeout | null = null;
   private hostname: string;
   private cacheFileWatcher: vscode.FileSystemWatcher | null = null;
+  private packageInfo: Map<string, { version: string; timestamp: number; dirHash?: string }> = new Map();
   
   constructor() {
     // Create a temporary file for passing package lists to Go
@@ -399,23 +410,35 @@ export class GoSymbolCache {
       // Get all Go packages
       const limitToDirectDeps = true; // For better performance
       const allPackages = await this.getAllGoPackages(limitToDirectDeps);
-      logger.log(`Found ${allPackages.length} Go packages to check for outdated status`);
+      logger.log(`Found ${allPackages.length} Go packages to check for outdated status`, 2);
       
       // Check which packages have changed versions or are new
       const changedPackages = await this.getChangedWorkspacePackages();
+      
+      // Count how many are truly new vs changed
+      let newPackages = 0;
+      let changedVersions = 0;
       
       for (const pkg of allPackages) {
         // Package should be reprocessed if:
         // 1. It's a new package we haven't indexed before
         // 2. It's a package with a changed version
-        if (!this.indexedPackages.has(pkg) || changedPackages.has(pkg)) {
+        if (!this.indexedPackages.has(pkg)) {
           outdatedPackages.push(pkg);
+          newPackages++;
+        } else if (changedPackages.has(pkg)) {
+          outdatedPackages.push(pkg);
+          changedVersions++;
         }
       }
       
-      logger.log(`Identified ${outdatedPackages.length} packages that need indexing or re-indexing`);
+      logger.log(`Identified ${outdatedPackages.length} packages that need indexing or re-indexing`, 1);
+      if (outdatedPackages.length > 0) {
+        logger.log(`  - ${newPackages} new packages not previously indexed`, 2);
+        logger.log(`  - ${changedVersions} packages with changed versions`, 2);
+      }
     } catch (error) {
-      logger.log(`Error determining outdated packages: ${error instanceof Error ? error.message : String(error)}`);
+      logger.log(`Error determining outdated packages: ${error instanceof Error ? error.message : String(error)}`, 1);
     }
     
     return outdatedPackages;
@@ -443,7 +466,7 @@ export class GoSymbolCache {
     try {
       // Check if cache file exists
       if (!fs.existsSync(this.cachePath)) {
-        logger.log("No cache file found on disk");
+        logger.log("No cache file found on disk", 1);
         return false;
       }
       
@@ -453,13 +476,13 @@ export class GoSymbolCache {
       
       // Validate cache format version
       if (cacheData.version !== CACHE_VERSION) {
-        logger.log(`Cache version mismatch: expected ${CACHE_VERSION}, got ${cacheData.version}`);
+        logger.log(`Cache version mismatch: expected ${CACHE_VERSION}, got ${cacheData.version}`, 1);
         return false;
       }
       
       // Validate Go version
       if (cacheData.goVersion !== this.goVersion) {
-        logger.log(`Go version changed: cache=${cacheData.goVersion}, current=${this.goVersion}`);
+        logger.log(`Go version changed: cache=${cacheData.goVersion}, current=${this.goVersion}`, 1);
         return false;
       }
       
@@ -472,21 +495,39 @@ export class GoSymbolCache {
       // Store indexed packages
       this.indexedPackages = new Map(Object.entries(cacheData.packages));
       
+      // Initialize packageInfo if it's missing from the cache (backward compatibility)
+      this.packageInfo = new Map();
+      if (cacheData.packageInfo) {
+        for (const [pkg, info] of Object.entries(cacheData.packageInfo)) {
+          this.packageInfo.set(pkg, info);
+        }
+        logger.log(`Loaded package metadata for ${this.packageInfo.size} packages`, 2);
+      } else {
+        // Create basic packageInfo from indexed packages
+        for (const [pkg, version] of this.indexedPackages.entries()) {
+          this.packageInfo.set(pkg, {
+            version,
+            timestamp: cacheData.timestamp
+          });
+        }
+        logger.log(`Generated basic package metadata for ${this.indexedPackages.size} packages`, 2);
+      }
+      
       // Process the list of processed packages if available (for backward compatibility)
       let processedPackagesList: string[] = [];
       if (cacheData.processedPackages && Array.isArray(cacheData.processedPackages)) {
         processedPackagesList = cacheData.processedPackages;
-        logger.log(`Loaded ${processedPackagesList.length} processed packages from cache`);
+        logger.log(`Loaded ${processedPackagesList.length} processed packages from cache`, 2);
       } else {
         // For backward compatibility with older cache format
-        logger.log("Cache doesn't contain processed packages list, will rebuild incrementally");
+        logger.log("Cache doesn't contain processed packages list, will rebuild incrementally", 2);
         processedPackagesList = Array.from(this.indexedPackages.keys());
       }
       
       // Check if package versions have changed in the workspace and update only those packages
       const changedPackages = await this.getChangedWorkspacePackages();
       if (changedPackages.size > 0) {
-        logger.log(`${changedPackages.size} workspace package versions have changed, selectively updating cache`);
+        logger.log(`${changedPackages.size} workspace package versions have changed, selectively updating cache`, 1);
         
         // Remove symbols from changed packages
         this.removeSymbolsForPackages(Array.from(changedPackages.keys()));
@@ -494,22 +535,27 @@ export class GoSymbolCache {
         // Remove changed packages from indexed packages
         for (const pkg of changedPackages.keys()) {
           this.indexedPackages.delete(pkg);
+          this.packageInfo.delete(pkg);
         }
         
         // Update indexedPackages with new versions
         for (const [pkg, version] of changedPackages.entries()) {
           this.indexedPackages.set(pkg, version);
+          this.packageInfo.set(pkg, {
+            version,
+            timestamp: Date.now()
+          });
         }
         
         // We still consider the cache successfully loaded, but we'll update the changed packages later
-        logger.log(`Removed symbols for ${changedPackages.size} changed packages, will re-index them`);
+        logger.log(`Removed symbols for ${changedPackages.size} changed packages, will re-index them`, 1);
       }
       
-      logger.log(`Loaded ${this.symbols.size} symbols from cache, covering ${this.indexedPackages.size} packages`);
+      logger.log(`Loaded ${this.symbols.size} symbols from cache, covering ${this.indexedPackages.size} packages`, 1);
       this.initializedCommonPackages = true; // Assume cache included common packages
       return true;
     } catch (error) {
-      logger.log(`Error loading cache from disk: ${error instanceof Error ? error.message : String(error)}`);
+      logger.log(`Error loading cache from disk: ${error instanceof Error ? error.message : String(error)}`, 1);
       return false;
     }
   }
@@ -524,16 +570,24 @@ export class GoSymbolCache {
       // Get current workspace package versions
       const currentVersions = await this.getWorkspacePackageVersions();
       
+      // Track the total compared for logging
+      let totalCompared = 0;
+      
       // Compare with cached versions
       for (const [pkg, version] of currentVersions) {
         const cachedVersion = this.indexedPackages.get(pkg);
+        totalCompared++;
+        
         if (cachedVersion !== version) {
-          logger.log(`Package version changed: ${pkg} was ${cachedVersion}, now ${version}`);
+          // Add more detailed logging for version changes
+          logger.log(`Package version changed: ${pkg} was ${cachedVersion || 'not indexed'}, now ${version}`, 2);
           changedPackages.set(pkg, version);
         }
       }
+      
+      logger.log(`Checked ${totalCompared} workspace packages for version changes, found ${changedPackages.size} changed`, 2);
     } catch (error) {
-      logger.log(`Error checking workspace packages: ${error instanceof Error ? error.message : String(error)}`);
+      logger.log(`Error checking workspace packages: ${error instanceof Error ? error.message : String(error)}`, 1);
     }
     
     return changedPackages;
@@ -579,17 +633,22 @@ export class GoSymbolCache {
       const currentVersions = await this.getWorkspacePackageVersions();
       
       // Compare with cached versions
+      let totalCompared = 0;
+      
       for (const [pkg, version] of currentVersions) {
         const cachedVersion = this.indexedPackages.get(pkg);
+        totalCompared++;
+        
         if (cachedVersion !== version) {
-          logger.log(`Package version changed: ${pkg} was ${cachedVersion}, now ${version}`);
+          logger.log(`Package version changed: ${pkg} was ${cachedVersion || 'not indexed'}, now ${version}`, 2);
           return true;
         }
       }
       
+      logger.log(`Checked ${totalCompared} packages, no version changes detected`, 3);
       return false;
     } catch (error) {
-      logger.log(`Error checking workspace packages: ${error instanceof Error ? error.message : String(error)}`);
+      logger.log(`Error checking workspace packages: ${error instanceof Error ? error.message : String(error)}`, 1);
       return true; // Assume changed on error
     }
   }
@@ -691,31 +750,34 @@ export class GoSymbolCache {
    * Initialize all packages in the background
    */
   private async initializeAllPackagesInBackground(): Promise<void> {
-    logger.log("Starting background initialization of Go packages...");
+    logger.log("Starting background initialization of Go packages...", 1);
     
     try {
+      // Get configuration for direct deps mode
+      const config = vscode.workspace.getConfiguration('goSymbolCompletion');
+      const limitToDirectDeps = config.get<boolean>('limitToDirectDeps', DEFAULT_DIRECT_DEPS_ONLY);
+      
       // Get the list of all Go packages
-      const limitToDirectDeps = true; // For better performance
       const allPackages = await this.getAllGoPackages(limitToDirectDeps);
-      logger.log(`Found ${allPackages.length} Go packages to potentially index`);
+      logger.log(`Found ${allPackages.length} Go packages to potentially index`, 1);
       
       // Get the list of packages that have already been processed
       const processedPackages = new Set(Array.from(this.indexedPackages.keys()));
-      logger.log(`Already processed ${processedPackages.size} packages from previous sessions`);
+      logger.log(`Already processed ${processedPackages.size} packages from previous sessions`, 2);
       
       // Filter out packages that are already indexed
       const packagesToProcess = allPackages.filter(pkg => !processedPackages.has(pkg));
-      logger.log(`Need to process ${packagesToProcess.length} new packages`);
+      logger.log(`Need to process ${packagesToProcess.length} new packages`, 1);
       
       // If there's nothing to do, we're done
       if (packagesToProcess.length === 0) {
-        logger.log("All packages are already indexed - indexing is complete");
+        logger.log("All packages are already indexed - indexing is complete", 1);
         return;
       }
       
       // Log which packages will be processed
       if (packagesToProcess.length > 0) {
-        logger.log(`Indexing packages (sample): ${packagesToProcess.slice(0, Math.min(5, packagesToProcess.length)).join(', ')}`);
+        logger.log(`Indexing packages (sample): ${packagesToProcess.slice(0, Math.min(5, packagesToProcess.length)).join(', ')}`, 2);
       }
       
       // Process packages in batches for better responsiveness
@@ -734,12 +796,12 @@ export class GoSymbolCache {
         // Save progress after each batch
         await this.saveCacheToDisk();
         
-        logger.log(`Indexing progress: ${processedCount}/${totalToProcess} packages (${Math.round(processedCount/totalToProcess*100)}%)`);
+        logger.log(`Indexing progress: ${processedCount}/${totalToProcess} packages (${Math.round(processedCount/totalToProcess*100)}%)`, 1);
       }
       
-      logger.log("Background indexing of all packages completed");
+      logger.log("Background indexing of all packages completed", 1);
     } catch (error) {
-      logger.log(`Error in background initialization: ${error instanceof Error ? error.message : String(error)}`);
+      logger.log(`Error in background initialization: ${error instanceof Error ? error.message : String(error)}`, 1);
     }
   }
   
@@ -1246,18 +1308,27 @@ export class GoSymbolCache {
    * Update stored package versions for change detection
    */
   private async updatePackageVersions(packages: string[]): Promise<void> {
+    logger.log(`Updating version info for ${packages.length} packages`, 3);
+    
     try {
       // For standard library packages, just use the Go version
       for (const pkg of packages) {
-        if (this.isStandardLibraryPackage(pkg) && !this.indexedPackages.has(pkg)) {
+        if (this.isStandardLibraryPackage(pkg)) {
           this.indexedPackages.set(pkg, this.goVersion);
+          this.packageInfo.set(pkg, {
+            version: this.goVersion,
+            timestamp: Date.now()
+          });
         }
       }
       
       // For external packages, try to get actual versions
-      const externalPkgs = packages.filter(pkg => !this.isStandardLibraryPackage(pkg) && !this.indexedPackages.has(pkg));
+      const externalPkgs = packages.filter(pkg => !this.isStandardLibraryPackage(pkg) && !this.workspaceModules.some(m => pkg === m || pkg.startsWith(m + '/')));
+      const workspacePkgs = packages.filter(pkg => this.workspaceModules.some(m => pkg === m || pkg.startsWith(m + '/')));
       
-      if (externalPkgs.length === 0) {
+      logger.log(`Processing ${externalPkgs.length} external packages and ${workspacePkgs.length} workspace packages`, 3);
+      
+      if (externalPkgs.length === 0 && workspacePkgs.length === 0) {
         return;
       }
       
@@ -1286,13 +1357,32 @@ export class GoSymbolCache {
               moduleVersions.set(parts[0], parts[1]);
             } else if (parts.length === 1) {
               // Main module
-              moduleVersions.set(parts[0], 'workspace');
+              moduleVersions.set(parts[0], `workspace-${Date.now()}`); // Add timestamp for workspace modules
             }
           }
-          logger.log(`Found ${moduleVersions.size} modules in go.mod`);
+          logger.log(`Found ${moduleVersions.size} modules in go.mod`, 3);
         }
       } catch (error) {
-        logger.log(`Error getting all modules: ${error instanceof Error ? error.message : String(error)}`);
+        logger.log(`Error getting all modules: ${error instanceof Error ? error.message : String(error)}`, 2);
+      }
+      
+      // For workspace packages, calculate a timestamp-based version to detect changes
+      for (const pkg of workspacePkgs) {
+        try {
+          const version = `workspace-${Date.now()}`;
+          this.indexedPackages.set(pkg, version);
+          this.packageInfo.set(pkg, {
+            version,
+            timestamp: Date.now()
+          });
+        } catch (error) {
+          // Just use a default value if we can't get proper info
+          this.indexedPackages.set(pkg, `workspace-${Date.now()}`);
+          this.packageInfo.set(pkg, {
+            version: `workspace-${Date.now()}`,
+            timestamp: Date.now()
+          });
+        }
       }
       
       // Use go list -m -json for each package root to get more detailed information
@@ -1300,18 +1390,29 @@ export class GoSymbolCache {
         try {
           // First try to find a direct match in moduleVersions
           let found = false;
+          let version = '';
           
           // Check if the full package path matches a module exactly
           if (moduleVersions.has(pkg)) {
-            this.indexedPackages.set(pkg, moduleVersions.get(pkg)!);
+            version = moduleVersions.get(pkg)!;
+            this.indexedPackages.set(pkg, version);
+            this.packageInfo.set(pkg, {
+              version,
+              timestamp: Date.now()
+            });
             found = true;
             continue;
           }
           
           // Try to find the module that contains this package by checking prefixes
-          for (const [module, version] of moduleVersions.entries()) {
+          for (const [module, modVersion] of moduleVersions.entries()) {
             if (pkg.startsWith(module + '/')) {
+              version = modVersion;
               this.indexedPackages.set(pkg, version);
+              this.packageInfo.set(pkg, {
+                version,
+                timestamp: Date.now()
+              });
               found = true;
               break;
             }
@@ -1341,7 +1442,12 @@ export class GoSymbolCache {
               try {
                 const moduleInfo = JSON.parse(jsonOutput);
                 if (moduleInfo.Version) {
-                  this.indexedPackages.set(pkg, moduleInfo.Version);
+                  version = moduleInfo.Version;
+                  this.indexedPackages.set(pkg, version);
+                  this.packageInfo.set(pkg, {
+                    version,
+                    timestamp: Date.now()
+                  });
                   continue;
                 }
               } catch (jsonErr) {
@@ -1361,7 +1467,12 @@ export class GoSymbolCache {
           if (output && output.trim()) {
             const parts = output.trim().split(/\s+/);
             if (parts.length >= 2) {
-              this.indexedPackages.set(pkg, parts[1]);
+              version = parts[1];
+              this.indexedPackages.set(pkg, version);
+              this.packageInfo.set(pkg, {
+                version,
+                timestamp: Date.now()
+              });
             } else {
               // Last resort: try to find a similar module prefix
               let bestMatch = '';
@@ -1372,24 +1483,43 @@ export class GoSymbolCache {
               }
               
               if (bestMatch) {
-                this.indexedPackages.set(pkg, moduleVersions.get(bestMatch)!);
+                version = moduleVersions.get(bestMatch)!;
+                this.indexedPackages.set(pkg, version);
+                this.packageInfo.set(pkg, {
+                  version,
+                  timestamp: Date.now()
+                });
               } else {
-                this.indexedPackages.set(pkg, 'unknown');
+                version = `unknown-${Date.now()}`;
+                this.indexedPackages.set(pkg, version);
+                this.packageInfo.set(pkg, {
+                  version,
+                  timestamp: Date.now()
+                });
               }
             }
           } else {
-            this.indexedPackages.set(pkg, 'unknown');
+            version = `unknown-${Date.now()}`;
+            this.indexedPackages.set(pkg, version);
+            this.packageInfo.set(pkg, {
+              version,
+              timestamp: Date.now()
+            });
           }
         } catch (error) {
           // If we can't determine the version, just mark as unknown
-          this.indexedPackages.set(pkg, 'unknown');
+          const version = `unknown-${Date.now()}`;
+          this.indexedPackages.set(pkg, version);
+          this.packageInfo.set(pkg, {
+            version,
+            timestamp: Date.now()
+          });
         }
       }
       
-      logger.log(`Updated versions for ${externalPkgs.length} external packages`);
-      
+      logger.log(`Updated versions for ${externalPkgs.length + workspacePkgs.length} packages`, 2);
     } catch (error) {
-      logger.log(`Error updating package versions: ${error instanceof Error ? error.message : String(error)}`);
+      logger.log(`Error updating package versions: ${error instanceof Error ? error.message : String(error)}`, 1);
     }
   }
   
@@ -1982,122 +2112,47 @@ export class GoSymbolCache {
    * Save the symbol cache to disk
    */
   private async saveCacheToDisk(): Promise<void> {
-    // Only allow the leader to save the cache
     if (!this.isLeader) {
-      logger.log("Not the leader, skipping cache save");
+      logger.log("Not saving cache because this instance is not the leader", 2);
       return;
     }
     
+    logger.log("Saving symbol cache to disk...", 2);
+    
     try {
-      logger.log("Saving symbol cache to disk...");
-      
-      // Verify we have data to save
-      if (this.symbols.size === 0) {
-        logger.log("No symbols in memory to save - skipping cache write");
-        return;
-      }
-      
-      // Log symbol count for debugging
-      let totalSymbolCount = 0;
-      for (const symbolList of this.symbols.values()) {
-        totalSymbolCount += symbolList.length;
-      }
-      logger.log(`Preparing to save ${this.symbols.size} unique symbols (${totalSymbolCount} total) from ${this.indexedPackages.size} packages`);
-      
-      // Convert Maps to serializable objects
-      const packagesObj: { [key: string]: string } = {};
-      for (const [pkg, version] of this.indexedPackages.entries()) {
-        packagesObj[pkg] = version;
-      }
-      
-      const symbolsObj: { [key: string]: GoSymbol[] } = {};
-      for (const [name, symbols] of this.symbols.entries()) {
-        symbolsObj[name] = symbols;
-      }
-      
-      // Get the list of processed packages from indexed packages
-      const processedPackages = Array.from(this.indexedPackages.keys());
-      
-      // Get extension version and process ID for tracking
-      const extensionVersion = this.getExtensionVersion();
-      const processId = process.pid;
-      
-      // Create cache data structure
+      // Prepare the cache data for serialization
       const cacheData: CacheData = {
         version: CACHE_VERSION,
         goVersion: this.goVersion,
         timestamp: Date.now(),
-        extensionVersion,
-        processId,
-        packages: packagesObj,
-        symbols: symbolsObj,
-        processedPackages: processedPackages
+        extensionVersion: this.getExtensionVersion(),
+        processId: process.pid,
+        packages: Object.fromEntries(this.indexedPackages),
+        packageInfo: Object.fromEntries(this.packageInfo),
+        symbols: {},
+        processedPackages: Array.from(this.indexedPackages.keys())
       };
       
-      // Log who is writing to the cache
-      logger.log(`Writing cache from extension version ${extensionVersion} (PID: ${processId})`);
-      
-      // Verify the data structure has content
-      if (Object.keys(symbolsObj).length === 0) {
-        logger.log("WARNING: No symbols to save, but indexedPackages.size is " + this.indexedPackages.size);
+      // Convert Map to serializable object
+      for (const [name, symbols] of this.symbols) {
+        cacheData.symbols[name] = symbols;
       }
       
-      // Ensure directory exists
-      const cacheDir = path.dirname(this.cachePath);
-      if (!fs.existsSync(cacheDir)) {
-        logger.log(`Creating cache directory: ${cacheDir}`);
-        fs.mkdirSync(cacheDir, { recursive: true });
-      }
+      // Convert to JSON
+      const cacheContent = JSON.stringify(cacheData);
       
-      // Serialize data with safety checks
-      let jsonData: string;
-      try {
-        jsonData = JSON.stringify(cacheData, null, 2);
-        logger.log(`Serialized cache data: ${jsonData.length} bytes`);
-        
-        // Check that serialization produced valid content
-        if (jsonData.length < 100) {
-          logger.log(`WARNING: Serialized cache data is suspiciously small: ${jsonData.length} bytes`);
-        } else if (!jsonData.includes('"symbols":{')) {
-          logger.log(`WARNING: Serialized cache data may be invalid - missing symbols object`);
-        }
-      } catch (jsonError) {
-        logger.log(`Error serializing cache data: ${jsonError instanceof Error ? jsonError.message : String(jsonError)}`);
-        return;
-      }
+      // Write to a temp file first
+      const tempCachePath = `${this.cachePath}.tmp`;
+      await fs.promises.writeFile(tempCachePath, cacheContent, 'utf-8');
       
-      // Write file with explicit sync to ensure it's written
-      const tempPath = `${this.cachePath}.tmp`;
-      try {
-        // Write to a temporary file first
-        await fs.promises.writeFile(tempPath, jsonData, 'utf-8');
-        
-        // Verify the file was written correctly
-        const stats = await fs.promises.stat(tempPath);
-        logger.log(`Temporary cache file size: ${stats.size} bytes`);
-        
-        if (stats.size < 100) {
-          throw new Error("Cache file is suspiciously small, aborting save");
-        }
-        
-        // Rename the temp file to the actual cache file (atomic operation)
-        await fs.promises.rename(tempPath, this.cachePath);
-        
-        logger.log(`Cache saved to ${this.cachePath} with ${this.symbols.size} unique symbols (${totalSymbolCount} total) and ${processedPackages.length} processed packages`);
-      } catch (fileError) {
-        logger.log(`Error writing cache file: ${fileError instanceof Error ? fileError.message : String(fileError)}`);
-        
-        // Try direct write as fallback
-        try {
-          logger.log("Attempting direct write as fallback...");
-          await fs.promises.writeFile(this.cachePath, jsonData, 'utf-8');
-          logger.log("Direct write succeeded");
-        } catch (directError) {
-          logger.log(`Direct write also failed: ${directError instanceof Error ? directError.message : String(directError)}`);
-        }
-      }
+      // Then atomically rename to the final path
+      await fs.promises.rename(tempCachePath, this.cachePath);
+      
+      const stats = await fs.promises.stat(this.cachePath);
+      const fileSizeKB = Math.round(stats.size / 1024);
+      logger.log(`Cache saved successfully (${fileSizeKB} KB, ${Object.keys(cacheData.symbols).length} unique symbols)`, 1);
     } catch (error) {
-      logger.log(`Error saving cache: ${error instanceof Error ? error.message : String(error)}`);
+      logger.log(`Error saving cache: ${error instanceof Error ? error.message : String(error)}`, 1);
     }
   }
 
@@ -2111,30 +2166,44 @@ export class GoSymbolCache {
       await this.initialize();
     }
 
-    logger.log(`Reindexing package: ${packagePath}`);
+    logger.log(`Reindexing package: ${packagePath}`, 1);
     
     try {
       // Get all subpackages using the Go list command
       const workspaceFolders = vscode.workspace.workspaceFolders;
       if (!workspaceFolders || workspaceFolders.length === 0) {
-        logger.log('No workspace folders found');
+        logger.log('No workspace folders found', 1);
         return;
       }
       
       const cwd = workspaceFolders[0].uri.fsPath;
       
       // Get all subpackages of the specified package
-      const packagesToReindex: string[] = [];
+      let packagesToReindex: string[] = [];
       
       // Always include the base package
       packagesToReindex.push(packagePath);
       
-      // Try to get subpackages using go list command
+      // Helper function to format packages and show summary
+      const logReindexSummary = () => {
+        const limitToShow = 10;
+        let summary = `Will reindex ${packagesToReindex.length} packages`;
+        
+        if (packagesToReindex.length <= limitToShow) {
+          summary += `: ${packagesToReindex.join(', ')}`;
+        } else {
+          summary += ` (showing first ${limitToShow}): ${packagesToReindex.slice(0, limitToShow).join(', ')}...`;
+        }
+        
+        logger.log(summary, 1);
+      };
+      
+      // First try: Use go list with JSON output
       try {
-        // Use a more direct approach to list packages with the -json flag to get detailed information
+        logger.log(`Discovering subpackages using go list -json ${packagePath}/...`, 2);
+        
         const output = await this.execCommand(`go list -json ${packagePath}/...`, {
           cwd,
-          silent: true,
           maxBuffer: 10 * 1024 * 1024 // 10MB buffer for large output
         });
         
@@ -2147,132 +2216,263 @@ export class GoSymbolCache {
               const pkgInfo = JSON.parse(line);
               if (pkgInfo.ImportPath && !packagesToReindex.includes(pkgInfo.ImportPath)) {
                 packagesToReindex.push(pkgInfo.ImportPath);
-                logger.log(`Found subpackage: ${pkgInfo.ImportPath}`);
+                logger.log(`Found subpackage: ${pkgInfo.ImportPath}`, 3);
               }
             } catch (jsonError) {
-              logger.log(`Error parsing JSON for subpackage: ${jsonError instanceof Error ? jsonError.message : String(jsonError)}`);
+              logger.log(`Error parsing JSON for subpackage: ${jsonError instanceof Error ? jsonError.message : String(jsonError)}`, 2);
             }
           }
+        }
+        
+        // If we found packages, log summary and proceed
+        if (packagesToReindex.length > 1) {
+          logger.log(`Found ${packagesToReindex.length - 1} subpackages using JSON format`, 2);
+          logReindexSummary();
+          
+          await this.processPackagesForReindexing(packagesToReindex);
+          return;
+        } else {
+          logger.log(`No subpackages found with JSON format, trying plain text`, 2);
         }
       } catch (error) {
-        logger.log(`Error getting subpackages with json format for ${packagePath}: ${error instanceof Error ? error.message : String(error)}`);
-        
-        // Try with plain text output as fallback
-        try {
-          const output = await this.execCommand(`go list ${packagePath}/...`, {
-            cwd,
-            silent: true,
-            maxBuffer: 2 * 1024 * 1024
-          });
-          
-          if (output && output.trim()) {
-            const subPackages = output.trim().split('\n')
-              .map(line => line.trim())
-              .filter(line => line);
-            
-            // Add unique subpackages
-            for (const pkg of subPackages) {
-              if (!packagesToReindex.includes(pkg)) {
-                packagesToReindex.push(pkg);
-                logger.log(`Found subpackage: ${pkg}`);
-              }
-            }
-          }
-        } catch (plainError) {
-          logger.log(`Error getting subpackages with plain format for ${packagePath}: ${plainError instanceof Error ? plainError.message : String(plainError)}`);
-        }
+        logger.log(`Error getting subpackages with JSON format: ${error instanceof Error ? error.message : String(error)}`, 2);
       }
       
-      // If we failed to discover subpackages, try with a different approach using go modules
-      if (packagesToReindex.length <= 1) {
-        logger.log(`No subpackages found with direct listing, trying module-based approach...`);
+      // Second try: Use plain text go list
+      try {
+        logger.log(`Discovering subpackages using go list ${packagePath}/...`, 2);
+        
+        const output = await this.execCommand(`go list ${packagePath}/...`, {
+          cwd,
+          maxBuffer: 2 * 1024 * 1024
+        });
+        
+        if (output && output.trim()) {
+          const subPackages = output.trim().split('\n')
+            .map(line => line.trim())
+            .filter(line => line);
+          
+          // Reset and start fresh with the new packages
+          packagesToReindex = [packagePath];
+          
+          // Add unique subpackages
+          for (const pkg of subPackages) {
+            if (!packagesToReindex.includes(pkg)) {
+              packagesToReindex.push(pkg);
+              logger.log(`Found subpackage: ${pkg}`, 3);
+            }
+          }
+          
+          // If we found packages, log summary and proceed
+          if (packagesToReindex.length > 1) {
+            logger.log(`Found ${packagesToReindex.length - 1} subpackages using plain text format`, 2);
+            logReindexSummary();
+            
+            await this.processPackagesForReindexing(packagesToReindex);
+            return;
+          } else {
+            logger.log(`No subpackages found with plain text format, trying module-based approach`, 2);
+          }
+        }
+      } catch (plainError) {
+        logger.log(`Error getting subpackages with plain format: ${plainError instanceof Error ? plainError.message : String(plainError)}`, 2);
+      }
+      
+      // Third try: Module-based approach
+      try {
+        logger.log(`No subpackages found with direct listing, trying module-based approach`, 2);
         
         // Try to determine if this is a module in go.mod
-        try {
-          const goModOutput = await this.execCommand(`go list -m all`, {
-            cwd,
-            silent: true
-          });
+        const goModOutput = await this.execCommand(`go list -m all`, {
+          cwd
+        });
+        
+        if (goModOutput && goModOutput.trim()) {
+          const modules = goModOutput.trim().split('\n');
           
-          if (goModOutput && goModOutput.trim()) {
-            const modules = goModOutput.trim().split('\n');
+          // Find if our package is part of a module or is a module itself
+          let modulePrefix = "";
+          for (const modLine of modules) {
+            const parts = modLine.trim().split(/\s+/);
+            const modName = parts[0];
             
-            // Find if our package is part of a module or is a module itself
-            let modulePrefix = "";
-            for (const modLine of modules) {
-              const parts = modLine.trim().split(/\s+/);
-              const modName = parts[0];
-              
-              if (packagePath === modName || packagePath.startsWith(modName + '/')) {
-                modulePrefix = modName;
-                break;
-              }
+            if (packagePath === modName || packagePath.startsWith(modName + '/')) {
+              modulePrefix = modName;
+              break;
             }
+          }
+          
+          if (modulePrefix) {
+            logger.log(`Found module prefix: ${modulePrefix} for package: ${packagePath}`, 2);
             
-            if (modulePrefix) {
-              logger.log(`Found module prefix: ${modulePrefix} for package: ${packagePath}`);
+            // Get all packages for this module
+            const modulePackagesOutput = await this.execCommand(`go list ${modulePrefix}/...`, {
+              cwd,
+              maxBuffer: 5 * 1024 * 1024
+            });
+            
+            if (modulePackagesOutput && modulePackagesOutput.trim()) {
+              // Reset our package list and start with the main package
+              packagesToReindex = [packagePath];
               
-              // Get all packages for this module
-              try {
-                const modulePackagesOutput = await this.execCommand(`go list ${modulePrefix}/...`, {
-                  cwd,
-                  silent: true,
-                  maxBuffer: 5 * 1024 * 1024
-                });
-                
-                if (modulePackagesOutput && modulePackagesOutput.trim()) {
-                  const modulePackages = modulePackagesOutput.trim().split('\n')
-                    .map(line => line.trim())
-                    .filter(line => line);
-                  
-                  // Filter packages to include only those under our packagePath
-                  for (const pkg of modulePackages) {
-                    if (pkg === packagePath || pkg.startsWith(packagePath + '/')) {
-                      if (!packagesToReindex.includes(pkg)) {
-                        packagesToReindex.push(pkg);
-                        logger.log(`Found module subpackage: ${pkg}`);
-                      }
-                    }
+              const modulePackages = modulePackagesOutput.trim().split('\n')
+                .map(line => line.trim())
+                .filter(line => line);
+              
+              // Filter packages to include only those under our packagePath
+              for (const pkg of modulePackages) {
+                if (pkg === packagePath || pkg.startsWith(packagePath + '/')) {
+                  if (!packagesToReindex.includes(pkg)) {
+                    packagesToReindex.push(pkg);
+                    logger.log(`Found module subpackage: ${pkg}`, 3);
                   }
                 }
-              } catch (modulePackagesError) {
-                logger.log(`Error listing module packages: ${modulePackagesError instanceof Error ? modulePackagesError.message : String(modulePackagesError)}`);
+              }
+              
+              // If we found packages, log summary and proceed
+              if (packagesToReindex.length > 1) {
+                logger.log(`Found ${packagesToReindex.length - 1} subpackages using module-based approach`, 2);
+                logReindexSummary();
+                
+                await this.processPackagesForReindexing(packagesToReindex);
+                return;
               }
             }
           }
-        } catch (modError) {
-          logger.log(`Error getting modules: ${modError instanceof Error ? modError.message : String(modError)}`);
         }
+      } catch (moduleError) {
+        logger.log(`Error with module-based approach: ${moduleError instanceof Error ? moduleError.message : String(moduleError)}`, 2);
       }
       
-      logger.log(`Found ${packagesToReindex.length} packages to reindex: ${packagesToReindex.join(', ')}`);
-      
-      // Remove these packages from the indexed list to force them to be reprocessed
-      for (const pkg of packagesToReindex) {
-        this.indexedPackages.delete(pkg);
+      // Fourth try: Direct path inspection
+      try {
+        logger.log(`No success with Go commands, trying direct path inspection`, 2);
         
-        // Also remove symbols for this package
-        for (const [name, symbols] of this.symbols.entries()) {
-          const filteredSymbols = symbols.filter(symbol => symbol.packagePath !== pkg);
-          if (filteredSymbols.length !== symbols.length) {
-            if (filteredSymbols.length === 0) {
-              // If no symbols left, remove the entry
-              this.symbols.delete(name);
-            } else {
-              // Otherwise update with filtered list
-              this.symbols.set(name, filteredSymbols);
+        // Try to determine if this is a Go module by looking at go.mod files
+        // First try to find a module in the GOPATH
+        const goPaths = process.env.GOPATH?.split(path.delimiter) || [];
+        for (const goPath of goPaths) {
+          if (!goPath) continue;
+          
+          // Construct path to module location
+          const moduleSrcPath = path.join(goPath, 'pkg', 'mod', packagePath);
+          if (fs.existsSync(moduleSrcPath)) {
+            logger.log(`Found module at ${moduleSrcPath}, checking for Go files`, 2);
+            
+            // Check if this is a directory with Go files
+            try {
+              const dirents = fs.readdirSync(moduleSrcPath, { withFileTypes: true });
+              
+              // Reset package list
+              packagesToReindex = [packagePath];
+              
+              // Find subdirectories recursively
+              const findSubdirs = (dir: string, pkgPath: string) => {
+                try {
+                  const entries = fs.readdirSync(dir, { withFileTypes: true });
+                  
+                  // Check if this directory has Go files
+                  const hasGoFiles = entries.some(entry => !entry.isDirectory() && entry.name.endsWith('.go'));
+                  if (hasGoFiles) {
+                    if (!packagesToReindex.includes(pkgPath)) {
+                      packagesToReindex.push(pkgPath);
+                      logger.log(`Found directory with Go files: ${pkgPath}`, 3);
+                    }
+                  }
+                  
+                  // Recurse into subdirectories
+                  for (const entry of entries) {
+                    if (entry.isDirectory() && !entry.name.startsWith('.')) {
+                      const subdir = path.join(dir, entry.name);
+                      const subpkgPath = `${pkgPath}/${entry.name}`;
+                      findSubdirs(subdir, subpkgPath);
+                    }
+                  }
+                } catch (err) {
+                  logger.log(`Error inspecting directory ${dir}: ${err instanceof Error ? err.message : String(err)}`, 2);
+                }
+              };
+              
+              // Start recursive search
+              findSubdirs(moduleSrcPath, packagePath);
+              
+              // If we found subdirectories with Go files, proceed
+              if (packagesToReindex.length > 1) {
+                logger.log(`Found ${packagesToReindex.length - 1} subdirectories with Go files`, 2);
+                logReindexSummary();
+                
+                await this.processPackagesForReindexing(packagesToReindex);
+                return;
+              }
+            } catch (dirError) {
+              logger.log(`Error reading module directory: ${dirError instanceof Error ? dirError.message : String(dirError)}`, 2);
             }
           }
         }
+      } catch (fsError) {
+        logger.log(`Error inspecting file system: ${fsError instanceof Error ? fsError.message : String(fsError)}`, 2);
       }
       
-      // Now extract symbols for these packages
-      await this.extractSymbolsFromPackages(packagesToReindex);
+      // If we got here, we couldn't find any subpackages with any approach
+      logger.log(`Couldn't find any subpackages for ${packagePath}, proceeding with just the main package`, 1);
       
-      logger.log(`Reindexing completed for ${packagePath} and ${packagesToReindex.length - 1} subpackages`);
+      // Process just the main package
+      await this.processPackagesForReindexing([packagePath]);
     } catch (error) {
-      logger.log(`Error reindexing package ${packagePath}: ${error instanceof Error ? error.message : String(error)}`);
+      logger.log(`Error reindexing package ${packagePath}: ${error instanceof Error ? error.message : String(error)}`, 1);
       throw error;
     }
+  }
+  
+  /**
+   * Process a list of packages for reindexing
+   * @param packagesToReindex List of packages to reindex
+   */
+  private async processPackagesForReindexing(packagesToReindex: string[]): Promise<void> {
+    logger.log(`Starting reindexing of ${packagesToReindex.length} packages...`, 1);
+    
+    // Remove these packages from the indexed list to force them to be reprocessed
+    let totalSymbolsRemoved = 0;
+    for (const pkg of packagesToReindex) {
+      this.indexedPackages.delete(pkg);
+      this.packageInfo.delete(pkg);
+      
+      // Also remove symbols for this package
+      const symbolsRemoved = this.removeSymbolsForPackage(pkg);
+      totalSymbolsRemoved += symbolsRemoved;
+    }
+    
+    logger.log(`Removed ${totalSymbolsRemoved} symbols from ${packagesToReindex.length} packages`, 2);
+    
+    // Now extract symbols for these packages
+    await this.extractSymbolsFromPackages(packagesToReindex);
+    
+    logger.log(`Reindexing completed for ${packagesToReindex.length} packages`, 1);
+  }
+  
+  /**
+   * Remove symbols for a specific package
+   * @param packagePath Package path to remove symbols for
+   * @returns Number of symbols removed
+   */
+  private removeSymbolsForPackage(packagePath: string): number {
+    let symbolsRemoved = 0;
+    
+    for (const [name, symbols] of this.symbols.entries()) {
+      const filteredSymbols = symbols.filter(symbol => symbol.packagePath !== packagePath);
+      if (filteredSymbols.length !== symbols.length) {
+        symbolsRemoved += symbols.length - filteredSymbols.length;
+        
+        if (filteredSymbols.length === 0) {
+          // If no symbols left, remove the entry
+          this.symbols.delete(name);
+        } else {
+          // Otherwise update with filtered list
+          this.symbols.set(name, filteredSymbols);
+        }
+      }
+    }
+    
+    return symbolsRemoved;
   }
 } 
