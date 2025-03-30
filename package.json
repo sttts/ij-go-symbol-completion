@@ -1,6 +1,6 @@
 {
   "name": "go-symbol-completion",
-  "displayName": "Go Symbol Completion",
+  "displayName": "Experimental Go Symbol Completion",
   "description": "Go symbol completion with or without package prefix, similar to other popular IDEs",
   "version": "0.1.7",
   "publisher": "sttts",
