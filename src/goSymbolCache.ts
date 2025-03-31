@@ -205,7 +205,7 @@ export class GoSymbolCache {
           // If there are outdated packages, process them in the background
           if (reprocessPackages.length > 0) {
             logger.log(`Found ${reprocessPackages.length} outdated packages to reprocess in background`);
-            this.extractSymbolsFromPackages(reprocessPackages).catch(err => {
+            this.processPackagesInBatches(reprocessPackages).catch(err => {
               logger.log(`Error reprocessing outdated packages: ${err instanceof Error ? err.message : String(err)}`);
             });
           }
@@ -883,29 +883,48 @@ export class GoSymbolCache {
         logger.log(`Indexing packages (sample): ${packagesToProcess.slice(0, Math.min(5, packagesToProcess.length)).join(', ')}`, 2);
       }
       
-      // Process packages in batches for better responsiveness
-      const batchSize = 20;
-      let processedCount = 0;
-      const totalToProcess = packagesToProcess.length;
-      
-      // Process in smaller batches and save progress after each batch
-      for (let i = 0; i < packagesToProcess.length; i += batchSize) {
-        const batch = packagesToProcess.slice(i, i + batchSize);
-        
-        // Process this batch
-        await this.extractSymbolsFromPackages(batch);
-        processedCount += batch.length;
-        
-        // Save progress after each batch
-        await this.saveCacheToDisk();
-        
-        logger.log(`Indexing progress: ${processedCount}/${totalToProcess} packages (${Math.round(processedCount/totalToProcess*100)}%)`, 1);
-      }
+      // Process packages in batches
+      await this.processPackagesInBatches(packagesToProcess, 20);
       
       logger.log("Background indexing of all packages completed", 1);
     } catch (error) {
       logger.log(`Error in background initialization: ${error instanceof Error ? error.message : String(error)}`, 1);
     }
+  }
+  
+  /**
+   * Process packages in batches to avoid memory issues
+   * @param packages Array of packages to process
+   * @param batchSize Size of each batch (default: 50)
+   */
+  private async processPackagesInBatches(packages: string[], batchSize: number = 50): Promise<void> {
+    if (packages.length === 0) {
+      return;
+    }
+    
+    logger.log(`Processing ${packages.length} packages in batches of ${batchSize}`, 1);
+    
+    let processedCount = 0;
+    const totalToProcess = packages.length;
+    
+    // Process in smaller batches and save progress after each batch
+    for (let i = 0; i < packages.length; i += batchSize) {
+      const batch = packages.slice(i, i + batchSize);
+      logger.log(`Processing batch ${Math.floor(i/batchSize) + 1}/${Math.ceil(packages.length/batchSize)} (${batch.length} packages)`, 2);
+      
+      // Process this batch
+      await this.extractSymbolsFromPackages(batch);
+      processedCount += batch.length;
+      
+      // Log progress
+      const progressPercent = Math.round(processedCount/totalToProcess*100);
+      logger.log(`Processing progress: ${processedCount}/${totalToProcess} packages (${progressPercent}%)`, 1);
+      
+      // Save progress after each batch
+      await this.saveCacheToDisk();
+    }
+    
+    logger.log(`Completed processing ${packages.length} packages in batches`, 1);
   }
   
   /**
@@ -2663,8 +2682,8 @@ export class GoSymbolCache {
     
     logger.log(`Removed ${totalSymbolsRemoved} symbols from ${packagesToReindex.length} packages`, 2);
     
-    // Now extract symbols for these packages
-    await this.extractSymbolsFromPackages(packagesToReindex);
+    // Now extract symbols for these packages in batches
+    await this.processPackagesInBatches(packagesToReindex);
     
     logger.log(`Reindexing completed for ${packagesToReindex.length} packages`, 1);
   }
