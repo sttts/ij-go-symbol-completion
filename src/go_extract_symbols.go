@@ -12,6 +12,7 @@ import (
 	"regexp"
 	"strings"
 	"time"
+	"unicode"
 )
 
 // Output structure
@@ -21,11 +22,12 @@ type SymbolOutput struct {
 
 // Package symbols
 type PackageSymbols struct {
-	Name       string     `json:"Name"`
-	ImportPath string     `json:"ImportPath"`
-	Functions  []Function `json:"Functions"`
-	Types      []Type     `json:"Types"`
-	Variables  []Variable `json:"Variables"`
+	Name       string     `json:"name"`
+	ImportPath string     `json:"importPath"`
+	Functions  []Function `json:"functions"`
+	Types      []Type     `json:"types"`
+	Variables  []Variable `json:"variables"`
+	Version    string     `json:"version,omitempty"`
 }
 
 // Function symbol
@@ -683,57 +685,20 @@ func main() {
 	return result, nil
 }
 
-// processExportedSymbol adds a symbol to the package based on name
+// processExportedSymbol processes an exported symbol name and adds it to the package symbols
 func processExportedSymbol(symbolName string, pkg *PackageSymbols) {
-	if symbolName == "" {
+	// Skip if the symbol is not exported (doesn't start with an uppercase letter)
+	if len(symbolName) == 0 || !unicode.IsUpper(rune(symbolName[0])) {
 		return
 	}
 
-	debugLog(1, "Processing exported symbol: %s in package %s", symbolName, pkg.ImportPath)
-
-	// Check if symbol starts with uppercase letter (exported)
-	firstChar := symbolName[0:1]
-	isExported := firstChar == strings.ToUpper(firstChar) && firstChar != strings.ToLower(firstChar)
-
-	// Debug info about export status
-	if *debug {
-		if isExported {
-			debugLog(1, "Symbol %s.%s is exported (first char: %s)", pkg.ImportPath, symbolName, firstChar)
-		} else {
-			debugLog(1, "Symbol %s.%s is NOT exported (first char: %s) - will be skipped", pkg.ImportPath, symbolName, firstChar)
-		}
-	}
-
-	if !isExported {
-		// Skip non-exported symbols
-		return
-	}
-
-	// Try to guess the symbol type based on naming conventions
-	if strings.HasPrefix(symbolName, "New") || strings.HasPrefix(symbolName, "Create") ||
-		strings.HasSuffix(symbolName, "Func") || strings.HasSuffix(symbolName, "Function") {
-		// Likely a function
-		pkg.Functions = append(pkg.Functions, Function{
-			Name:       symbolName,
-			IsExported: true,
-		})
-		debugLog(1, "Added symbol %s.%s as a function", pkg.ImportPath, symbolName)
-	} else if isTitleCase(symbolName) && !strings.HasSuffix(symbolName, "s") &&
-		!strings.HasSuffix(symbolName, "er") && symbolName != pkg.Name {
-		// Likely a type (CamelCase, not plural, not ending with -er, not same as package name)
-		pkg.Types = append(pkg.Types, Type{
-			Name:       symbolName,
-			IsExported: true,
-		})
-		debugLog(1, "Added symbol %s.%s as a type", pkg.ImportPath, symbolName)
-	} else {
-		// Default to variable
-		pkg.Variables = append(pkg.Variables, Variable{
-			Name:       symbolName,
-			IsExported: true,
-		})
-		debugLog(1, "Added symbol %s.%s as a variable", pkg.ImportPath, symbolName)
-	}
+	// For now, we don't have enough information to distinguish between types and functions
+	// So we just add it as a type with "unknown" kind
+	pkg.Types = append(pkg.Types, Type{
+		Name:       symbolName,
+		Kind:       "unknown",
+		IsExported: true,
+	})
 }
 
 // parseDocOutput parses go doc output and extracts symbols
@@ -847,17 +812,16 @@ func parseDocOutput(docOutput string, pkg *PackageSymbols) {
 
 // isTitleCase checks if a string starts with an uppercase letter
 func isTitleCase(s string) bool {
-	if s == "" {
+	if len(s) == 0 {
 		return false
 	}
-	firstChar := s[0:1]
-	return firstChar == strings.ToUpper(firstChar) && firstChar != strings.ToLower(firstChar)
+	return unicode.IsUpper(rune(s[0]))
 }
 
-// truncateOutput truncates the output to a specified length
-func truncateOutput(output string, length int) string {
-	if len(output) > length {
-		return output[:length] + "..."
+// truncateOutput truncates a string output to a maximum length with ellipsis
+func truncateOutput(output string, maxLength int) string {
+	if len(output) <= maxLength {
+		return output
 	}
-	return output
+	return output[:maxLength] + "... (truncated)"
 }
