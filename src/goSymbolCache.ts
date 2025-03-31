@@ -417,6 +417,16 @@ export class GoSymbolCache {
       // Check which packages have changed versions or are new
       const changedPackages = await this.getChangedWorkspacePackages();
       
+      // Add diagnostics about indexedPackages state
+      logger.log(`Current indexedPackages status: ${this.indexedPackages.size} packages in cache`, 1);
+      if (this.indexedPackages.size === 0) {
+        logger.log(`WARNING: indexedPackages is empty! This will cause all packages to be marked as new.`, 1);
+        logger.log(`Cache state: initialized=${this.initialized}, leader=${this.isLeader}, symbols=${this.symbols.size}`, 1);
+      } else {
+        const sampleKeys = Array.from(this.indexedPackages.keys()).slice(0, 5);
+        logger.log(`Sample indexed packages: ${sampleKeys.join(', ')}`, 2);
+      }
+      
       // Count how many are truly new vs changed
       let newPackages = 0;
       let changedVersions = 0;
@@ -428,6 +438,17 @@ export class GoSymbolCache {
       let changedVersionExamples: string[] = [];
       let missingMetadataExamples: string[] = [];
       let oldMetadataExamples: string[] = [];
+      
+      // Special handling: If indexedPackages is empty but we have symbols,
+      // this is likely a corrupted state. Let's rebuild the indexedPackages map
+      // from packageInfo before proceeding.
+      if (this.indexedPackages.size === 0 && this.packageInfo.size > 0) {
+        logger.log(`Recovering indexedPackages from packageInfo (${this.packageInfo.size} entries)`, 1);
+        for (const [pkg, info] of this.packageInfo.entries()) {
+          this.indexedPackages.set(pkg, info.version);
+        }
+        logger.log(`Recovered ${this.indexedPackages.size} entries into indexedPackages`, 1);
+      }
       
       for (const pkg of allPackages) {
         // Package should be reprocessed if:
@@ -550,6 +571,11 @@ export class GoSymbolCache {
       
       // Store indexed packages
       this.indexedPackages = new Map(Object.entries(cacheData.packages));
+      if (this.indexedPackages.size === 0) {
+        logger.log(`WARNING: Loaded cache has empty indexedPackages map`, 1);
+      } else {
+        logger.log(`Loaded ${this.indexedPackages.size} indexed packages from cache`, 2);
+      }
       
       // Initialize packageInfo if it's missing from the cache (backward compatibility)
       this.packageInfo = new Map();
@@ -568,6 +594,27 @@ export class GoSymbolCache {
         }
         logger.log(`Generated basic package metadata for ${this.indexedPackages.size} packages`, 2);
       }
+      
+      // Consistency check: ensure packageInfo and indexedPackages are in sync
+      if (this.indexedPackages.size === 0 && this.packageInfo.size > 0) {
+        logger.log(`Recovering indexedPackages from packageInfo (${this.packageInfo.size} entries)`, 1);
+        for (const [pkg, info] of this.packageInfo.entries()) {
+          this.indexedPackages.set(pkg, info.version);
+        }
+        logger.log(`Recovered ${this.indexedPackages.size} entries into indexedPackages`, 1);
+      } else if (this.packageInfo.size === 0 && this.indexedPackages.size > 0) {
+        logger.log(`Recovering packageInfo from indexedPackages (${this.indexedPackages.size} entries)`, 1);
+        for (const [pkg, version] of this.indexedPackages.entries()) {
+          this.packageInfo.set(pkg, {
+            version,
+            timestamp: cacheData.timestamp || Date.now()
+          });
+        }
+        logger.log(`Recovered ${this.packageInfo.size} entries into packageInfo`, 1);
+      }
+      
+      // Synchronize packages with symbols to prevent orphaned symbols
+      this.synchronizePackagesWithSymbols();
       
       // Process the list of processed packages if available (for backward compatibility)
       let processedPackagesList: string[] = [];
@@ -2646,5 +2693,61 @@ export class GoSymbolCache {
     }
     
     return symbolsRemoved;
+  }
+
+  /**
+   * Synchronize indexedPackages and symbols maps
+   * This ensures that any package that has symbols is also marked as indexed
+   */
+  private synchronizePackagesWithSymbols(): void {
+    if (this.indexedPackages.size === 0 && this.symbols.size > 0) {
+      logger.log(`Synchronizing packages with symbols: found mismatch (${this.indexedPackages.size} packages, ${this.symbols.size} symbol groups)`, 1);
+      
+      // Build a set of all packages that have symbols
+      const packagesWithSymbols = new Set<string>();
+      
+      // Iterate through all symbols and collect their packages
+      for (const symbolList of this.symbols.values()) {
+        for (const symbol of symbolList) {
+          if (symbol.packagePath && !packagesWithSymbols.has(symbol.packagePath)) {
+            packagesWithSymbols.add(symbol.packagePath);
+          }
+        }
+      }
+      
+      logger.log(`Found ${packagesWithSymbols.size} packages with symbols that need to be added to indexedPackages`, 1);
+      
+      // Add each package to indexedPackages with a timestamp-based version
+      const timestamp = Date.now();
+      let newlyAdded = 0;
+      
+      for (const pkg of packagesWithSymbols) {
+        if (!this.indexedPackages.has(pkg)) {
+          // Generate a version based on whether it's a standard library package
+          const version = this.isStandardLibraryPackage(pkg) 
+            ? this.goVersion 
+            : `recovered-${timestamp}`;
+          
+          this.indexedPackages.set(pkg, version);
+          
+          // Also update packageInfo if needed
+          if (!this.packageInfo.has(pkg)) {
+            this.packageInfo.set(pkg, {
+              version,
+              timestamp
+            });
+          }
+          
+          newlyAdded++;
+        }
+      }
+      
+      logger.log(`Added ${newlyAdded} packages to indexedPackages based on symbols map`, 1);
+      if (newlyAdded > 0) {
+        // List some examples
+        const examples = Array.from(packagesWithSymbols).slice(0, 5);
+        logger.log(`Examples of recovered packages: ${examples.join(', ')}`, 1);
+      }
+    }
   }
 } 
