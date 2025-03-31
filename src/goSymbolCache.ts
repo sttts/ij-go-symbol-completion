@@ -420,26 +420,32 @@ export class GoSymbolCache {
       // Count how many are truly new vs changed
       let newPackages = 0;
       let changedVersions = 0;
-      let debugReasons: {pkg: string, reason: string}[] = [];
+      let missingMetadata = 0;
+      let oldMetadata = 0;
+      
+      // For detailed logging
+      let newPackageExamples: string[] = [];
+      let changedVersionExamples: string[] = [];
+      let missingMetadataExamples: string[] = [];
+      let oldMetadataExamples: string[] = [];
       
       for (const pkg of allPackages) {
-        // Store reasons for the first 5 packages
-        let reindexReason = '';
-        
         // Package should be reprocessed if:
         // 1. It's a new package we haven't indexed before
         // 2. It's a package with a changed version
         // 3. Its package info is missing or outdated
         if (!this.indexedPackages.has(pkg)) {
           outdatedPackages.push(pkg);
-          reindexReason = 'New package not previously indexed';
           newPackages++;
+          if (newPackageExamples.length < 5) newPackageExamples.push(pkg);
         } else if (changedPackages.has(pkg)) {
           outdatedPackages.push(pkg);
-          const oldVer = this.indexedPackages.get(pkg);
-          const newVer = changedPackages.get(pkg);
-          reindexReason = `Version changed from ${oldVer} to ${newVer}`;
           changedVersions++;
+          if (changedVersionExamples.length < 5) {
+            const oldVer = this.indexedPackages.get(pkg);
+            const newVer = changedPackages.get(pkg);
+            changedVersionExamples.push(`${pkg} (${oldVer} → ${newVer})`);
+          }
         } else {
           // Additional checks to avoid unnecessary reindexing
           const pkgInfo = this.packageInfo.get(pkg);
@@ -451,37 +457,40 @@ export class GoSymbolCache {
           } else if (!pkgInfo) {
             // Missing package info means we should reindex
             outdatedPackages.push(pkg);
-            reindexReason = 'Missing package metadata';
+            missingMetadata++;
+            if (missingMetadataExamples.length < 5) missingMetadataExamples.push(pkg);
           } else {
             // We have metadata but it's old - only reindex workspace packages
             if (this.isWorkspacePackage(pkg)) {
               outdatedPackages.push(pkg);
-              reindexReason = `Old metadata (${new Date(pkgInfo.timestamp).toISOString()})`;
+              oldMetadata++;
+              if (oldMetadataExamples.length < 5) {
+                const age = Math.round((Date.now() - pkgInfo.timestamp) / (24 * 60 * 60 * 1000));
+                oldMetadataExamples.push(`${pkg} (${age} days old)`);
+              }
             } else {
               // For non-workspace packages, we don't need to reindex as frequently
               continue;
             }
           }
         }
-        
-        // Store debug info for the first 5 packages
-        if (debugReasons.length < 5 && reindexReason) {
-          debugReasons.push({pkg, reason: reindexReason});
-        }
       }
       
       logger.log(`Identified ${outdatedPackages.length} packages that need indexing or re-indexing`, 1);
       if (outdatedPackages.length > 0) {
-        logger.log(`  - ${newPackages} new packages not previously indexed`, 2);
-        logger.log(`  - ${changedVersions} packages with changed versions`, 2);
-        logger.log(`  - ${outdatedPackages.length - newPackages - changedVersions} packages with outdated metadata`, 2);
-        
-        // Log first 5 packages and why they're being reindexed
-        if (debugReasons.length > 0) {
-          logger.log(`First ${debugReasons.length} packages being reindexed:`, 1);
-          debugReasons.forEach(({pkg, reason}, i) => {
-            logger.log(`  [${i+1}] ${pkg}: ${reason}`, 1);
-          });
+        // Log summary statistics
+        logger.log(`Reindexing reasons:`, 1);
+        if (newPackages > 0) {
+          logger.log(`  - New packages: ${newPackages} [Examples: ${newPackageExamples.join(', ')}${newPackages > 5 ? '...' : ''}]`, 1);
+        }
+        if (changedVersions > 0) {
+          logger.log(`  - Changed versions: ${changedVersions} [Examples: ${changedVersionExamples.join(', ')}${changedVersions > 5 ? '...' : ''}]`, 1);
+        }
+        if (missingMetadata > 0) {
+          logger.log(`  - Missing metadata: ${missingMetadata} [Examples: ${missingMetadataExamples.join(', ')}${missingMetadata > 5 ? '...' : ''}]`, 1);
+        }
+        if (oldMetadata > 0) {
+          logger.log(`  - Outdated metadata: ${oldMetadata} [Examples: ${oldMetadataExamples.join(', ')}${oldMetadata > 5 ? '...' : ''}]`, 1);
         }
       }
     } catch (error) {
