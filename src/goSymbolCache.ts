@@ -904,25 +904,53 @@ export class GoSymbolCache {
     
     logger.log(`Processing ${packages.length} packages in batches of ${batchSize}`, 1);
     
-    let processedCount = 0;
-    const totalToProcess = packages.length;
-    
-    // Process in smaller batches and save progress after each batch
-    for (let i = 0; i < packages.length; i += batchSize) {
-      const batch = packages.slice(i, i + batchSize);
-      logger.log(`Processing batch ${Math.floor(i/batchSize) + 1}/${Math.ceil(packages.length/batchSize)} (${batch.length} packages)`, 2);
+    // Use VS Code progress API to show progress in the status bar
+    await vscode.window.withProgress({
+      location: vscode.ProgressLocation.Window,
+      title: 'Go Symbol Indexing',
+      cancellable: false
+    }, async (progress) => {
+      let processedCount = 0;
+      const totalToProcess = packages.length;
       
-      // Process this batch
-      await this.extractSymbolsFromPackages(batch);
-      processedCount += batch.length;
+      // Initial progress report
+      progress.report({ 
+        message: `0/${totalToProcess} packages`, 
+        increment: 0 
+      });
       
-      // Log progress
-      const progressPercent = Math.round(processedCount/totalToProcess*100);
-      logger.log(`Processing progress: ${processedCount}/${totalToProcess} packages (${progressPercent}%)`, 1);
+      // Process in smaller batches and save progress after each batch
+      for (let i = 0; i < packages.length; i += batchSize) {
+        const batch = packages.slice(i, i + batchSize);
+        logger.log(`Processing batch ${Math.floor(i/batchSize) + 1}/${Math.ceil(packages.length/batchSize)} (${batch.length} packages)`, 2);
+        
+        // Process this batch
+        await this.extractSymbolsFromPackages(batch);
+        processedCount += batch.length;
+        
+        // Calculate progress percentage for both logging and UI
+        const progressPercent = Math.round(processedCount/totalToProcess*100);
+        
+        // Update progress bar
+        const increment = (batch.length / totalToProcess) * 100;
+        progress.report({ 
+          message: `${processedCount}/${totalToProcess} packages (${progressPercent}%)`,
+          increment 
+        });
+        
+        // Log progress
+        logger.log(`Processing progress: ${processedCount}/${totalToProcess} packages (${progressPercent}%)`, 1);
+        
+        // Save progress after each batch
+        await this.saveCacheToDisk();
+      }
       
-      // Save progress after each batch
-      await this.saveCacheToDisk();
-    }
+      // Final progress update
+      progress.report({ 
+        message: `Completed: ${packages.length} packages indexed`,
+        increment: 0
+      });
+    });
     
     logger.log(`Completed processing ${packages.length} packages in batches`, 1);
   }
