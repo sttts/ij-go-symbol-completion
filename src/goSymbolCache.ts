@@ -1399,8 +1399,8 @@ export class GoSymbolCache {
       // Debug the Go helper script content to verify it's the correct file
       try {
         const helperContent = await fs.promises.readFile(helperPath, 'utf-8');
-        logger.log(`Helper script size: ${helperContent.length} bytes`, 2);
-        logger.log(`Helper script first 100 chars: ${helperContent.substring(0, 100)}`, 2);
+        logger.log(`Helper script size: ${helperContent.length} bytes`);
+        logger.log(`Helper script first 100 chars: ${helperContent.substring(0, 100)}`);
       } catch (readError) {
         logger.log(`Failed to read helper script: ${readError instanceof Error ? readError.message : String(readError)}`);
       }
@@ -1409,48 +1409,104 @@ export class GoSymbolCache {
       const config = vscode.workspace.getConfiguration('goSymbolCompletion');
       const debugLevel = config.get<number>('debugLevel', 1);
       
-      // Run the helper program with the package list - add a debug output
-      const command = `go run ${helperPath} -packages=${this.tempFilePath} -verbose -v=${debugLevel}`;
-      logger.log(`Running command: ${command}`, 2);
+      // Use spawn instead of exec to stream output
+      logger.log(`Spawning Go helper process with go run ${helperPath} -packages=${this.tempFilePath} -verbose -v=${debugLevel}`);
       
-      const result = await this.execCommand(command);
-      
-      if (!result) {
-        logger.log('Extract symbols command returned empty result');
-        return;
-      }
-      
-      logger.log(`Got result of length: ${result.length} characters`);
-      
-      // Always log a sample of the result
-      logger.log(`Result sample: ${result.substring(0, 500).replace(/\n/g, '\\n')}`);
-      
-      // Parse and process the results
-      try {
-        const data = JSON.parse(result);
-        logger.log(`Successfully parsed JSON data with ${Object.keys(data).length} packages`);
-        const symbolCount = this.processExtractedSymbols(data);
-        logger.log(`Processed ${symbolCount} symbols from ${packages.length} packages`);
+      return new Promise<void>((resolve) => {
+        // Ensure helperPath is not undefined (we already checked this above)
+        if (!helperPath) {
+          logger.log('Helper path is undefined!');
+          resolve();
+          return;
+        }
         
-        // Store package versions for change detection
-        this.updatePackageVersions(packages);
+        const proc = child_process.spawn('go', [
+          'run',
+          helperPath,
+          `-packages=${this.tempFilePath}`,
+          `-verbose`,
+          `-v=${debugLevel}`
+        ], {
+          env: process.env
+        });
         
-        // Save cache immediately after processing to avoid losing symbols
-        logger.log("Saving cache to disk after symbol extraction");
-        await this.saveCacheToDisk();
-      } catch (jsonError) {
-        logger.log(`Error parsing JSON output: ${jsonError instanceof Error ? jsonError.message : String(jsonError)}`);
-        logger.log(`Invalid JSON output (first 300 chars): ${result.substring(0, 300).replace(/\n/g, '\\n')}`);
-      }
+        let stdout = '';
+        let stderr = '';
+        
+        // Stream stdout in real-time
+        if (proc.stdout) {
+          proc.stdout.on('data', (data: Buffer) => {
+            const chunk = data.toString();
+            stdout += chunk;
+            // Log only the first 300 chars of each chunk to avoid flooding the log
+            logger.log(`[GO-HELPER] ${chunk.length > 300 ? chunk.substring(0, 300) + '...' : chunk}`);
+          });
+        }
+        
+        // Stream stderr in real-time
+        if (proc.stderr) {
+          proc.stderr.on('data', (data: Buffer) => {
+            const chunk = data.toString();
+            stderr += chunk;
+            logger.log(`[GO-HELPER-ERR] ${chunk.length > 300 ? chunk.substring(0, 300) + '...' : chunk}`);
+          });
+        }
+        
+        proc.on('close', async (code: number | null) => {
+          logger.log(`Go helper process exited with code ${code}`);
+          
+          if (code !== 0) {
+            logger.log(`Error running Go helper: ${stderr}`);
+            resolve(); // Continue even if there's an error
+            return;
+          }
+          
+          if (!stdout) {
+            logger.log('Extract symbols command returned empty result');
+            resolve();
+            return;
+          }
+          
+          logger.log(`Got result of length: ${stdout.length} characters`);
+          
+          // Always log a sample of the result
+          logger.log(`Result sample: ${stdout.substring(0, 500).replace(/\n/g, '\\n')}`);
+          
+          // Parse and process the results
+          try {
+            const data = JSON.parse(stdout);
+            logger.log(`Successfully parsed JSON data with ${Object.keys(data).length} top-level keys`);
+            const symbolCount = this.processExtractedSymbols(data);
+            logger.log(`Processed ${symbolCount} symbols from ${packages.length} packages`);
+            
+            // Store package versions for change detection
+            await this.updatePackageVersions(packages);
+            
+            // Save cache immediately after processing to avoid losing symbols
+            logger.log("Saving cache to disk after symbol extraction");
+            await this.saveCacheToDisk();
+            resolve();
+          } catch (jsonError) {
+            logger.log(`Error parsing JSON output: ${jsonError instanceof Error ? jsonError.message : String(jsonError)}`);
+            logger.log(`Invalid JSON output (first 300 chars): ${stdout.substring(0, 300).replace(/\n/g, '\\n')}`);
+            resolve(); // Continue even if there's an error
+          }
+        });
+        
+        proc.on('error', (err: Error) => {
+          logger.log(`Error spawning Go helper process: ${err}`);
+          resolve(); // Continue even if there's an error
+        });
+      }).finally(async () => {
+        // Clean up the temporary file
+        try {
+          await fs.promises.unlink(this.tempFilePath);
+        } catch (cleanupError) {
+          // Ignore errors deleting temp file
+        }
+      });
     } catch (error) {
       logger.log(`Error extracting symbols: ${error instanceof Error ? error.message : String(error)}`);
-    } finally {
-      // Clean up the temporary file
-      try {
-        await fs.promises.unlink(this.tempFilePath);
-      } catch (cleanupError) {
-        // Ignore errors deleting temp file
-      }
     }
   }
   
