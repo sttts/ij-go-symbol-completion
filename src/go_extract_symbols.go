@@ -107,6 +107,38 @@ func verboseLog(format string, args ...interface{}) {
 	}
 }
 
+// Create a temporary directory with retries
+func createTempDirWithRetry(prefix string, maxRetries int) (string, error) {
+	var tempDir string
+	var err error
+
+	for i := 0; i < maxRetries; i++ {
+		tempDir, err = ioutil.TempDir("", prefix)
+		if err != nil {
+			debugLog(1, "Error creating temp directory (attempt %d/%d): %v", i+1, maxRetries, err)
+			continue
+		}
+
+		// Check if go.mod already exists (this shouldn't happen for a fresh temp dir)
+		goModPath := filepath.Join(tempDir, "go.mod")
+		if _, statErr := os.Stat(goModPath); statErr == nil {
+			// go.mod exists, try to remove it
+			debugLog(1, "Found existing go.mod in temp directory, attempting to remove")
+			if rmErr := os.Remove(goModPath); rmErr != nil {
+				debugLog(1, "Failed to remove existing go.mod: %v", rmErr)
+				// Try a different temp directory
+				os.RemoveAll(tempDir)
+				continue
+			}
+		}
+
+		// Success
+		return tempDir, nil
+	}
+
+	return "", fmt.Errorf("failed to create usable temp directory after %d attempts: %v", maxRetries, err)
+}
+
 func main() {
 	// Parse command line flags
 	flag.Parse()
@@ -152,8 +184,8 @@ func main() {
 		debugLog(3, "Packages to analyze: %s", strings.Join(packages, ", "))
 	}
 
-	// Create temp directory for our module
-	tempDir, err := ioutil.TempDir("", "go-symbols-extractor")
+	// Create temp directory for our module with retries
+	tempDir, err := createTempDirWithRetry("go-symbols-extractor", 3)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error creating temp directory: %v\n", err)
 		os.Exit(1)
